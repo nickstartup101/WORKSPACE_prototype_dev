@@ -482,15 +482,13 @@ export default function App() {
         {/* Dynamic Section Container */}
         <div className="flex-1 p-4 lg:p-6 overflow-y-auto bg-gradient-to-br from-[#f8fafc] to-[#f1f5f9] dark:from-[#052659] dark:to-[#073069]">
            <div className="max-w-7xl mx-auto space-y-6">
-             {activeTab === 'dashboard' && <Dashboard userSettings={userSettings} user={user} selectedBranch={selectedBranch} />}
-             {activeTab === 'cogs' && <CogsIntelligence selectedBranch={selectedBranch} userSettings={userSettings} />}
-             {activeTab === 'reports' && <FinanceReport selectedBranch={selectedBranch} />}
-             {activeTab === 'debts' && <DebtLedger selectedBranch={selectedBranch} />}
-             {activeTab === 'suppliers' && <Suppliers />}
-             {activeTab === 'planner' && <ProcurementPlanner selectedBranch={selectedBranch} />}
-             {activeTab === 'financials' && <Financials appConfig={appConfig} selectedBranch={selectedBranch} />}
-             {activeTab === 'settings' && <Settings user={user} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} userSettings={userSettings} isSuperAdmin={isSuperAdmin} appConfig={appConfig} selectedBranch={selectedBranch} />}
-          </div>
+            {activeTab === 'dashboard' && <Dashboard userSettings={userSettings} user={user} selectedBranch={selectedBranch} />}{activeTab === 'cogs' && <CogsIntelligence selectedBranch={selectedBranch} userSettings={userSettings} />}
+            {activeTab === 'reports' && <FinanceReport selectedBranch={selectedBranch} />}
+            {activeTab === 'debts' && <DebtLedger selectedBranch={selectedBranch} />}
+            {activeTab === 'suppliers' && <Suppliers />}
+            {activeTab === 'planner' && <ProcurementPlanner selectedBranch={selectedBranch} />}
+            {activeTab === 'financials' && <Financials appConfig={appConfig} selectedBranch={selectedBranch} />}
+            {activeTab === 'settings' && <Settings user={user} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} userSettings={userSettings} isSuperAdmin={isSuperAdmin} appConfig={appConfig} selectedBranch={selectedBranch} />}
         </div>
 
         <PinModal 
