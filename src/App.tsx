@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { 
   LayoutDashboard, 
   Truck, 
@@ -11,26 +10,19 @@ import {
   Moon,
   Sun,
   Globe,
-  AlertCircle,
-  ShieldAlert,
-  Check,
-  Coffee,
-  PawPrint,
-  Eye,
-  EyeOff,
-  Sparkles,
   Store,
   MapPin,
   ChevronLeft,
   ChevronRight,
-  CheckCircle,
   PieChart,
-  Receipt
+  Receipt,
+  Sparkles,
+  Scale // 👈 ເພີ່ມໄອຄອນຕາຊັ່ງສຳລັບ COGS
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
-import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, User, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from 'firebase/auth';
-import { doc, onSnapshot, setDoc, serverTimestamp, collection, query, where, orderBy, limit, deleteDoc } from 'firebase/firestore';
+import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { doc, onSnapshot, setDoc, serverTimestamp, collection, query, where, limit } from 'firebase/firestore';
 import './i18n';
 
 // Components
@@ -42,6 +34,7 @@ import PinModal from './components/PinModal';
 import ProcurementPlanner from './components/ProcurementPlanner';
 import FinanceReport from './components/FinanceReport';
 import DebtLedger from './components/DebtLedger';
+import CogsIntelligence from './components/CogsIntelligence'; // 👈 ເຊື່ອມໂຍງໂມດູນ COGS
 
 // Premium Text Logo Component
 const TextLogo = ({ centered = false, dark = false, name = "La Dolce" }: { centered?: boolean, dark?: boolean, name?: string | null }) => (
@@ -94,10 +87,9 @@ export default function App() {
   const [adminData, setAdminData] = useState<any>(null);
   const [appConfig, setAppConfig] = useState<any>(null);
   const [lastActivity, setLastActivity] = useState(Date.now());
-  const [activeApprovalRequest, setActiveApprovalRequest] = useState<any>(null);
-  const [loginError, setLoginError] = useState<string | null>(null);
+  const [, setActiveApprovalRequest] = useState<any>(null);
+  const [, setLoginError] = useState<string | null>(null);
   const [isDemoLocal, setIsDemoLocal] = useState(false);
-  const [demoLoading, setDemoLoading] = useState(false);
   const isDemoLocalRef = useRef(false);
 
   useEffect(() => {
@@ -108,7 +100,7 @@ export default function App() {
     return (localStorage.getItem('selected_branch') as any) || 'branch_1';
   });
 
-  const [scannedBillData, setScannedBillData] = useState<any>(null);
+  const [, setScannedBillData] = useState<any>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -284,12 +276,13 @@ export default function App() {
     );
   }
 
-  // ✅ 🧭 ລາຍການເມນູທັງໝົດໃນລະບົບ (ລວມທັງ Report ແລະ Debts AP/AR):
+  // ✅ 🧭 ລາຍການເມນູທັງໝົດໃນລະບົບ (ລວມທັງ COGS ໃໝ່):
   const navItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: t('dashboard') },
     { id: 'report', icon: PieChart, label: i18n.language === 'la' ? 'ບົດລາຍງານການເງິນ' : 'Finance Report' },
     { id: 'debts', icon: Receipt, label: i18n.language === 'la' ? 'ໜີ້ຕ້ອງສົ່ງ & ຮັບ (AP/AR)' : 'Debt Ledger' },
     { id: 'suppliers', icon: Truck, label: t('suppliers') },
+    { id: 'cogs', icon: Scale, label: i18n.language === 'la' ? 'ຕົ້ນທຶນ COGS & ສະຕັອກ' : 'COGS & Stock' }, // 👈 ເພີ່ມເມນູ COGS ຢູ່ນີ້!
     { id: 'planner', icon: Sparkles, label: i18n.language === 'la' ? 'ແຜນຈັດຊື້ & ບິນ' : 'Auto-Bill Planner' },
     { id: 'financials', icon: Wallet, label: t('financials'), isSensitive: true },
     { id: 'settings', icon: SettingsIcon, label: t('settings') },
@@ -368,7 +361,7 @@ export default function App() {
               onClick={() => handleTabChange(item)}
               title={isSidebarCollapsed ? item.label : undefined}
               className={`
-                w-full flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'justify-start px-4'} py-3 rounded-xl text-[12px] font-bold uppercase tracking-wider transition-all duration-300
+                w-full flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'justify-start px-4'} py-3 rounded-xl text-[12px] font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer
                 ${activeTab === item.id 
                   ? 'bg-white/10 text-white shadow-[0_8px_16px_-4px_rgba(0,0,0,0.3)] border border-white/10 backdrop-blur-md' 
                   : 'text-white/40 hover:bg-white/5 hover:text-white'}
@@ -396,14 +389,14 @@ export default function App() {
           <div className={`flex ${isSidebarCollapsed ? 'flex-col items-center' : 'items-center'} gap-2`}>
             <button
               onClick={toggleSidebarCollapse}
-              className="hidden lg:flex items-center justify-center p-2 text-white/40 hover:text-white hover:bg-white/5 rounded-xl transition-all"
+              className="hidden lg:flex items-center justify-center p-2 text-white/40 hover:text-white hover:bg-white/5 rounded-xl transition-all cursor-pointer"
             >
               {isSidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
             </button>
 
             <button 
               onClick={logout}
-              className={`flex items-center justify-center gap-2 py-2 text-[11px] font-bold uppercase tracking-widest text-red-300 hover:text-red-400 hover:bg-white/5 rounded-xl transition-all ${isSidebarCollapsed ? 'w-full' : 'flex-1'}`}
+              className={`flex items-center justify-center gap-2 py-2 text-[11px] font-bold uppercase tracking-widest text-red-300 hover:text-red-400 hover:bg-white/5 rounded-xl transition-all cursor-pointer ${isSidebarCollapsed ? 'w-full' : 'flex-1'}`}
             >
               <LogOut className="w-3.5 h-3.5 shrink-0" />
               {!isSidebarCollapsed && <span className="animate-in fade-in duration-200">{t('logout')}</span>}
@@ -430,7 +423,7 @@ export default function App() {
 
           <div className="flex items-center gap-2">
              <div className="relative group">
-               <button className="h-9 px-3 bg-white/10 hover:bg-white/15 active:bg-white/20 rounded-xl flex items-center gap-2 transition-all border border-white/5 shadow-inner">
+               <button className="h-9 px-3 bg-white/10 hover:bg-white/15 active:bg-white/20 rounded-xl flex items-center gap-2 transition-all border border-white/5 shadow-inner cursor-pointer">
                  <Store className="w-3.5 h-3.5 text-blue-300" />
                  <span className="text-[10px] font-black uppercase tracking-wider text-white">
                    {selectedBranch === 'branch_1' 
@@ -443,14 +436,14 @@ export default function App() {
                <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-[#073069] border border-slate-100 dark:border-white/10 rounded-2xl shadow-xl py-2 hidden group-hover:block hover:block z-50 text-slate-800 dark:text-white">
                  <button
                    onClick={() => { setSelectedBranch('branch_1'); localStorage.setItem('selected_branch', 'branch_1'); }}
-                   className={`w-full text-left px-4 py-2.5 text-xs font-bold flex items-center gap-2 ${selectedBranch === 'branch_1' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'text-slate-700 dark:text-slate-300'}`}
+                   className={`w-full text-left px-4 py-2.5 text-xs font-bold flex items-center gap-2 cursor-pointer ${selectedBranch === 'branch_1' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'text-slate-700 dark:text-slate-300'}`}
                  >
                    <MapPin className="w-3.5 h-3.5" />
                    <span>ສາຂາ 1 (ນະຄອນຫຼວງ)</span>
                  </button>
                  <button
                    onClick={() => { setSelectedBranch('branch_2'); localStorage.setItem('selected_branch', 'branch_2'); }}
-                   className={`w-full text-left px-4 py-2.5 text-xs font-bold flex items-center gap-2 ${selectedBranch === 'branch_2' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'text-slate-700 dark:text-slate-300'}`}
+                   className={`w-full text-left px-4 py-2.5 text-xs font-bold flex items-center gap-2 cursor-pointer ${selectedBranch === 'branch_2' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'text-slate-700 dark:text-slate-300'}`}
                  >
                    <MapPin className="w-3.5 h-3.5" />
                    <span>ສາຂາ 2 (ຫຼວງພະບາງ)</span>
@@ -460,14 +453,14 @@ export default function App() {
 
              <button 
               onClick={() => i18n.changeLanguage(i18n.language === 'la' ? 'en' : 'la')}
-              className="p-2 hover:bg-white/10 rounded-md text-white flex items-center gap-2 text-[10px] font-black uppercase tracking-widest"
+              className="p-2 hover:bg-white/10 rounded-md text-white flex items-center gap-2 text-[10px] font-black uppercase tracking-widest cursor-pointer"
             >
               <Globe className="w-4 h-4 text-white/60" />
               <span className="hidden sm:inline">{i18n.language === 'la' ? 'LA' : 'EN'}</span>
             </button>
             <button 
               onClick={() => setIsDarkMode(!isDarkMode)}
-              className="p-2 hover:bg-white/10 rounded-md text-white flex items-center gap-2"
+              className="p-2 hover:bg-white/10 rounded-md text-white flex items-center gap-2 cursor-pointer"
             >
               {isDarkMode ? <Sun className="w-4 h-4 text-yellow-400" /> : <Moon className="w-4 h-4 text-blue-300" />}
             </button>
@@ -481,6 +474,7 @@ export default function App() {
              {activeTab === 'report' && <FinanceReport selectedBranch={selectedBranch} />}
              {activeTab === 'debts' && <DebtLedger selectedBranch={selectedBranch} />}
              {activeTab === 'suppliers' && <Suppliers />}
+             {activeTab === 'cogs' && <CogsIntelligence selectedBranch={selectedBranch} userSettings={userSettings} />} {/* 👈 ສະແດງໜ້າ COGS ຢູ່ນີ້ */}
              {activeTab === 'planner' && <ProcurementPlanner selectedBranch={selectedBranch} />}
              {activeTab === 'financials' && <Financials appConfig={appConfig} selectedBranch={selectedBranch} />}
              {activeTab === 'settings' && <Settings user={user} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} userSettings={userSettings} isSuperAdmin={isSuperAdmin} appConfig={appConfig} selectedBranch={selectedBranch} />}
