@@ -8,11 +8,26 @@ import {
   Scale, Calculator, Save, 
   Calendar, Search, Percent, Package, 
   ArrowUpRight, ArrowDownRight, Info, AlertTriangle, 
-  Link2, Check, Download, Plus
+  Link2, Check, Download, Zap, Sparkles, CheckCheck
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { utils, writeFile } from 'xlsx';
 import { useTranslation } from 'react-i18next';
+
+// 🛡️ ຟັງຊັນປົດວັນນະຍຸດລາວ & ໄທ (Lao Tone Stripper & Text Normalizer)
+// ປ່ຽນ: "ຜົງໂກ້ໂກ້", "ຜົງໂກ່ໂກ້", "ຜົງ ໂກໂກ" -> "ຜົງໂກໂກ"
+export const normalizeLaoText = (str: string): string => {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    // ຕັດໄມ້ວັນນະຍຸດລາວ: ໄມ້ເອກ (0EC8), ໄມ້ໂທ (0EC9), ໄມ້ຕີ (0ECA), ໄມ້ຈັດຕະວາ (0ECB), ໄມ້ກາລັນ (0ECC)
+    .replace(/[\u0EC8-\u0ECC]/g, '')
+    // ຕັດໄມ້ວັນນະຍຸດໄທ: (0E48 - 0E4C)
+    .replace(/[\u0E48-\u0E4C]/g, '')
+    // ຕັດຊ່ອງຫວ່າງ ແລະ ເຄື່ອງໝາຍພິເສດອອກ
+    .replace(/[^a-zA-Z0-9\u0E80-\u0EFF]/g, '')
+    .trim();
+};
 
 const toStandardDate = (raw: any): string => {
   if (!raw) return '';
@@ -48,6 +63,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const [skuMappings, setSkuMappings] = useState<Record<string, any>>({});
   const [saving, setSaving] = useState(false);
   const [mappingUpdatingId, setMappingUpdatingId] = useState<string | null>(null);
+  const [autoMatchingLoading, setAutoMatchingLoading] = useState(false);
 
   // State ສຳລັບເກັບຄ່າ SKU ທີ່ກຳລັງພິມໃນແຕ່ລະແຖວ
   const [inputSkus, setInputSkus] = useState<Record<string, string>>({});
@@ -107,7 +123,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     loadMonthlyStockCount();
   }, [currentBranch, selectedMonth]);
 
-  // 3. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier ເພື່ອນຳມາພິມຈັບຄູ່ SKU
+  // 3. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier ພ້ອມຫາ ຄຳແນະນຳ SKU ທີ່ຄ້າຍຄືກັນ (Smart Suggestion)
   const distinctSupplierItems = useMemo(() => {
     const map: Record<string, {
       rawId: string;
@@ -116,12 +132,15 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       totalPurchasedCount: number;
       totalSpendLAK: number;
       currentSku?: string;
+      suggestedSku?: string;
+      suggestedProdName?: string;
     }> = {};
 
     supplierPrices.forEach(sp => {
       const rawId = sp.productId || 'unknown';
       const supplier = sp.supplier || 'Unknown';
       const key = `${supplier}_${rawId}`;
+      const safeKey = key.replace(/[\/\s]/g, '_');
 
       const totalVal = sp.totalPriceLAK !== undefined
         ? Number(sp.totalPriceLAK || 0)
@@ -129,13 +148,33 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
       if (!map[key]) {
         const matchedOldProd = products.find(p => p.id === rawId);
+        const rawName = matchedOldProd?.name || sp.remark || rawId;
+        const currentSku = sp.sku || skuMappings[safeKey]?.targetSku || skuMappings[key]?.targetSku || matchedOldProd?.sku || '';
+
+        // ຊອກຫາສິນຄ້າທີ່ຄ້າຍຄືກັນໃນ Inventory ດ້ວຍ Lao Smart Normalization
+        let suggestedSku = '';
+        let suggestedProdName = '';
+        if (!currentSku) {
+          const normRaw = normalizeLaoText(rawName);
+          const foundMatch = products.find(p => {
+            const normP = normalizeLaoText(p.name);
+            return normP && (normRaw === normP || normRaw.includes(normP) || normP.includes(normRaw));
+          });
+          if (foundMatch && foundMatch.sku) {
+            suggestedSku = foundMatch.sku;
+            suggestedProdName = foundMatch.name;
+          }
+        }
+
         map[key] = {
           rawId,
-          rawName: matchedOldProd?.name || sp.remark || rawId,
+          rawName,
           supplier,
           totalPurchasedCount: 0,
           totalSpendLAK: 0,
-          currentSku: sp.sku || skuMappings[key]?.targetSku || matchedOldProd?.sku || ''
+          currentSku,
+          suggestedSku,
+          suggestedProdName
         };
       }
 
@@ -151,9 +190,13 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     return distinctSupplierItems.filter(item => !item.currentSku).length;
   }, [distinctSupplierItems]);
 
-  // 4. ບັນທຶກ SKU (ຂຽນເອງ + ສ້າງສິນຄ້າໃນ Inventory ອັດຕະໂນມັດຖ້າຍັງບໍ່ມີ)
-  const handleSaveSkuMapping = async (supplierKey: string, rawId: string, supplier: string, rawName: string) => {
-    const targetSku = (inputSkus[supplierKey] !== undefined ? inputSkus[supplierKey] : (skuMappings[supplierKey]?.targetSku || '')).trim();
+  // 4.1 ບັນທຶກ SKU ສຳລັບ 1 ລາຍການ
+  const handleSaveSkuMapping = async (supplierKey: string, rawId: string, supplier: string, rawName: string, customSkuToSave?: string) => {
+    const targetSku = (customSkuToSave !== undefined 
+      ? customSkuToSave 
+      : (inputSkus[supplierKey] !== undefined ? inputSkus[supplierKey] : (skuMappings[supplierKey.replace(/[\/\s]/g, '_')]?.targetSku || ''))
+    ).trim();
+
     if (!targetSku) {
       alert('ກະລຸນາພິມເລກ SKU ກ່ອນກົດບັນທຶກ!');
       return;
@@ -162,25 +205,26 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     try {
       setMappingUpdatingId(supplierKey);
 
-      // ກວດເບິ່ງວ່າມີສິນຄ້າທີ່ມີ SKU ນີ້ໃນ Inventory ແລ້ວຫຼືຍັງ
       let targetProduct = products.find(p => (p.sku || '').toLowerCase() === targetSku.toLowerCase());
-
-      // 🌟 ຖ້າຍັງບໍ່ມີໃນ Inventory -> ສ້າງສິນຄ້າໃໝ່ລົງ `products` ອັດຕະໂນມັດທັນທີ!
       if (!targetProduct) {
-        const newProdRef = await addDoc(collection(db, 'products'), {
-          name: rawName || targetSku,
-          sku: targetSku,
-          unit: 'UNIT',
-          category: 'Raw Material',
-          cost: 0,
-          isApproved: true,
-          createdAt: serverTimestamp()
-        });
-        targetProduct = { id: newProdRef.id, name: rawName, sku: targetSku, unit: 'UNIT' };
+        try {
+          const newProdRef = await addDoc(collection(db, 'products'), {
+            name: rawName || targetSku,
+            sku: targetSku,
+            unit: 'UNIT',
+            category: 'Raw Material',
+            cost: 0,
+            isApproved: true,
+            createdAt: serverTimestamp()
+          });
+          targetProduct = { id: newProdRef.id, name: rawName, sku: targetSku, unit: 'UNIT' };
+        } catch {
+          targetProduct = { id: rawId, name: rawName, sku: targetSku, unit: 'UNIT' };
+        }
       }
 
-      // 1. ບັນທຶກລົງ `sku_mappings`
-      await setDoc(doc(db, 'sku_mappings', supplierKey), {
+      const safeDocId = supplierKey.replace(/[\/\s]/g, '_');
+      await setDoc(doc(db, 'sku_mappings', safeDocId), {
         supplierKey,
         rawId,
         supplier,
@@ -190,20 +234,117 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         updatedAt: serverTimestamp()
       });
 
-      // 2. ອັບເດດບິນເກົ່າທັງໝົດຂອງ Supplier ນີ້ໃຫ້ມີ SKU ດຽວກັນ
-      const matchingBills = supplierPrices.filter(sp => (sp.productId === rawId || sp.id === rawId) && sp.supplier === supplier);
-      for (const bill of matchingBills) {
-        await updateDoc(doc(db, 'supplierPrices', bill.id), {
-          sku: targetSku,
-          mappedProductId: targetProduct.id
-        });
-      }
+      try {
+        const matchingBills = supplierPrices.filter(sp => (sp.productId === rawId || sp.id === rawId) && sp.supplier === supplier);
+        for (const bill of matchingBills) {
+          await updateDoc(doc(db, 'supplierPrices', bill.id), {
+            sku: targetSku,
+            mappedProductId: targetProduct.id
+          });
+        }
+      } catch {}
 
-      alert(`✅ ບັນທຶກ SKU "${targetSku}" ສຳເລັດ! (ອັບເດດບິນເກົ່າ ${matchingBills.length} ບິນ ແລະ ເພີ່ມລົງ Inventory ຮຽບຮ້ອຍ)`);
+      alert(`✅ ບັນທຶກ SKU "${targetSku}" ສຳເລັດ!`);
     } catch (err: any) {
       alert('Error updating SKU: ' + err.message);
     } finally {
       setMappingUpdatingId(null);
+    }
+  };
+
+  // 4.2 ⚡ ນຳໃຊ້ SKU ນີ້ໃຫ້ກັບທຸກຮ້ານທີ່ມີຊື່ຄ້າຍຄືກັນ (Batch Apply by Lao Normalized Name)
+  const handleApplyToAllSimilar = async (sourceRawName: string, targetSku: string) => {
+    if (!targetSku) {
+      alert('ກະລຸນາໃສ່ເລກ SKU ກ່ອນ!');
+      return;
+    }
+
+    const normSource = normalizeLaoText(sourceRawName);
+    if (!normSource) return;
+
+    if (!window.confirm(`ທ່ານຕ້ອງການນຳໃຊ້ SKU "${targetSku}" ໃຫ້ກັບທຸກຮ້ານທີ່ມີຊື່ຄື/ຄ້າຍຄື "${sourceRawName}" ແທ້ບໍ່?`)) {
+      return;
+    }
+
+    try {
+      setAutoMatchingLoading(true);
+      const similarItems = distinctSupplierItems.filter(item => {
+        const normItem = normalizeLaoText(item.rawName);
+        return normItem && (normItem === normSource || normItem.includes(normSource) || normSource.includes(normItem));
+      });
+
+      let appliedCount = 0;
+      for (const item of similarItems) {
+        const key = `${item.supplier}_${item.rawId}`;
+        const safeDocId = key.replace(/[\/\s]/g, '_');
+
+        await setDoc(doc(db, 'sku_mappings', safeDocId), {
+          supplierKey: key,
+          rawId: item.rawId,
+          supplier: item.supplier,
+          targetSku,
+          updatedAt: serverTimestamp()
+        });
+        appliedCount++;
+      }
+
+      alert(`🎉 ສຳເລັດ! ໄດ້ນຳໃຊ້ SKU "${targetSku}" ໃຫ້ກັບ ${appliedCount} ລາຍການຈາກທຸກໆຮ້ານຮຽບຮ້ອຍ!`);
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    } finally {
+      setAutoMatchingLoading(false);
+    }
+  };
+
+  // 4.3 ⚡ ປຸ່ມ Auto-Match All (ກວດສອບ ແລະ ຈັບຄູ່ທັງໝົດໃນ 1 ຄລິກ)
+  const handleSmartAutoMatchAll = async () => {
+    if (!window.confirm('ລະບົບຈະກວດສອບຊື່ສິນຄ້າທຸກຮ້ານ ແລະ ຈັບຄູ່ໃສ່ SKU ຂອງ Inventory ໃຫ້ອັດຕະໂນມັດ ທ່ານຕ້ອງການສືບຕໍ່ບໍ່?')) {
+      return;
+    }
+
+    try {
+      setAutoMatchingLoading(true);
+      let matchedCount = 0;
+
+      for (const item of distinctSupplierItems) {
+        if (item.currentSku) continue; // ຖ້າມີແລ້ວຂ້າມໄປ
+
+        const normRaw = normalizeLaoText(item.rawName);
+        if (!normRaw) continue;
+
+        // ຊອກຫາສິນຄ້າໃນ Inventory
+        const matchedProd = products.find(p => {
+          const normP = normalizeLaoText(p.name);
+          return normP && (normRaw === normP || normRaw.includes(normP) || normP.includes(normRaw));
+        });
+
+        if (matchedProd && matchedProd.sku) {
+          const key = `${item.supplier}_${item.rawId}`;
+          const safeDocId = key.replace(/[\/\s]/g, '_');
+
+          await setDoc(doc(db, 'sku_mappings', safeDocId), {
+            supplierKey: key,
+            rawId: item.rawId,
+            supplier: item.supplier,
+            targetSku: matchedProd.sku,
+            productId: matchedProd.id,
+            productName: matchedProd.name,
+            updatedAt: serverTimestamp()
+          });
+
+          matchedCount++;
+        }
+      }
+
+      if (matchedCount > 0) {
+        alert(`🎉 ລະບົບປົດວັນນະຍຸດ ແລະ ຈັບຄູ່ອັດຕະໂນມັດສຳເລັດ ${matchedCount} ລາຍການ!`);
+      } else {
+        alert('ບໍ່ພົບລາຍການໃໝ່ທີ່ຊື່ຕົງກັນ. ທ່ານສາມາດພິມ SKU ເອງໄດ້ເລີຍ!');
+      }
+    } catch (err: any) {
+      alert('Auto-match error: ' + err.message);
+    } finally {
+      setAutoMatchingLoading(false);
     }
   };
 
@@ -245,7 +386,14 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
     supplierPrices.forEach(sp => {
       const rawKey = `${sp.supplier}_${sp.productId}`;
-      const resolvedSku = (sp.sku || skuMappings[rawKey]?.targetSku || products.find(p => p.id === sp.productId)?.sku || '').trim();
+      const safeKey = rawKey.replace(/[\/\s]/g, '_');
+      const resolvedSku = (
+        sp.sku || 
+        skuMappings[safeKey]?.targetSku || 
+        skuMappings[rawKey]?.targetSku || 
+        products.find(p => p.id === sp.productId)?.sku || 
+        ''
+      ).trim();
 
       if (!resolvedSku || !skuLedger[resolvedSku]) return;
 
@@ -610,30 +758,48 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       )}
 
       {/* ======================================================== */}
-      {/* ແທັບທີ 2: ສູນປ້ອນ / ຈັບຄູ່ SKU ດ້ວຍຕົນເອງ (CUSTOM SKU INPUT) */}
+      {/* ແທັບທີ 2: ສູນປ້ອນ / ຈັບຄູ່ SKU ດ້ວຍຕົນເອງ (SMART SKU HUB) */}
       {/* ======================================================== */}
       {activeTab === 'sku_mapping' && (
         <div className="bg-white dark:bg-[#073069] rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl overflow-hidden space-y-4">
-          <div className="p-5 border-b border-slate-100 dark:border-white/10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div className="p-5 border-b border-slate-100 dark:border-white/10 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
             <div>
-              <h3 className="text-xs font-black uppercase text-slate-800 dark:text-white flex items-center gap-2">
-                <Link2 className="w-4 h-4 text-indigo-500" />
-                <span>ສູນປ້ອນ / ຈັບຄູ່ເລກ SKU ສິນຄ້າ (Supplier ➔ Inventory SKU)</span>
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-xs font-black uppercase text-slate-800 dark:text-white flex items-center gap-2">
+                  <Link2 className="w-4 h-4 text-indigo-500" />
+                  <span>ສູນຈັບຄູ່ SKU ອັດສະລິຍະ (Smart SKU Matching Hub)</span>
+                </h3>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-black uppercase">
+                  🇱🇦 Lao Tone Stripper Active
+                </span>
+              </div>
               <p className="text-[10.5px] text-slate-400 mt-0.5">
-                ທ່ານສາມາດ<strong>ພິມເລກ SKU ໃສ່ເອງໄດ້ໂດຍກົງ</strong>. ຖ້າ SKU ໃດຍັງບໍ່ມີໃນ Inventory ລະບົບຈະສ້າງສິນຄ້າໃໝ່ລົງຄັງ ແລະ ອັບເດດບິນເກົ່າໃຫ້ທັນທີ!
+                ລະບົບຕັດໄມ້ວັນນະຍຸດອັດຕະໂນມັດ (ຜົງໂກ້ໂກ້ = ຜົງໂກ່ໂກ້ = ຜົງໂກໂກ). ທ່ານສາມາດກົດປຸ່ມ Auto-Match ດ້ານຂວາເພື່ອຈັບຄູ່ທັງໝົດໃນຄລິກດຽວ!
               </p>
             </div>
 
-            <div className="relative w-full sm:w-64">
-              <input
-                type="text"
-                placeholder="ຄົ້ນຫາ Supplier ຫຼື ສິນຄ້າ..."
-                value={mappingSearch}
-                onChange={e => setMappingSearch(e.target.value)}
-                className="w-full h-9 pl-8 pr-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-xs outline-none"
-              />
-              <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-400" />
+            <div className="flex items-center gap-2 w-full lg:w-auto">
+              <div className="relative flex-1 lg:w-64">
+                <input
+                  type="text"
+                  placeholder="ຄົ້ນຫາ Supplier ຫຼື ສິນຄ້າ..."
+                  value={mappingSearch}
+                  onChange={e => setMappingSearch(e.target.value)}
+                  className="w-full h-9 pl-8 pr-3 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl text-xs outline-none"
+                />
+                <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-400" />
+              </div>
+
+              {/* ⚡ ປຸ່ມ Auto-Match ທັງໝົດໃນ 1 ຄລິກ */}
+              <button
+                type="button"
+                disabled={autoMatchingLoading}
+                onClick={handleSmartAutoMatchAll}
+                className="h-9 px-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-xl text-xs font-black uppercase flex items-center gap-1.5 shadow-md shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>{autoMatchingLoading ? 'ກຳລັງຈັບຄູ່...' : '⚡ Auto-Match ທັງໝົດ'}</span>
+              </button>
             </div>
           </div>
 
@@ -643,8 +809,8 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                 <tr>
                   <th className="p-3.5">Supplier</th>
                   <th className="p-3.5">ລາຍການສິນຄ້າໃນບິນຈັດຊື້</th>
-                  <th className="p-3.5 text-center">ຈຳນວນບິນທີ່ຊື້</th>
-                  <th className="p-3.5 w-72">ພິມເລກ SKU (ປ້ອນດ້ວຍຕົນເອງ)</th>
+                  <th className="p-3.5 text-center">ຈຳນວນບິນ</th>
+                  <th className="p-3.5 w-80">ພິມເລກ SKU / ຕົວຊ່ວຍ</th>
                   <th className="p-3.5 text-center">ສະຖານະ</th>
                 </tr>
               </thead>
@@ -665,8 +831,24 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                           {item.supplier}
                         </td>
                         
-                        <td className="p-3.5 font-bold text-slate-800 dark:text-white">
-                          {item.rawName}
+                        <td className="p-3.5">
+                          <p className="font-bold text-slate-800 dark:text-white">{item.rawName}</p>
+                          {/* 💡 ປ້າຍແນະນຳ SKU ຖ້າຊື່ຄ້າຍຄືກັນ */}
+                          {!isLinked && item.suggestedSku && (
+                            <div className="mt-1 flex items-center gap-1.5">
+                              <span className="text-[9.5px] text-amber-500 flex items-center gap-1">
+                                <Sparkles className="w-3 h-3" />
+                                ແນະນຳ: <strong className="font-mono">{item.suggestedSku}</strong> ({item.suggestedProdName})
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveSkuMapping(supplierKey, item.rawId, item.supplier, item.rawName, item.suggestedSku)}
+                                className="px-1.5 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-600 dark:text-amber-300 rounded text-[9px] font-black uppercase cursor-pointer"
+                              >
+                                [ຕົກລົງ]
+                              </button>
+                            </div>
+                          )}
                         </td>
 
                         <td className="p-3.5 text-center font-mono">
@@ -675,25 +857,40 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                           </span>
                         </td>
 
-                        {/* ✍️ ຊ່ອງພິມ SKU ເອງ + ປຸ່ມບັນທຶກ */}
+                        {/* ✍️ ຊ່ອງພິມ SKU + ປຸ່ມບັນທຶກ + ປຸ່ມນຳໃຊ້ກັບທຸກຮ້ານ */}
                         <td className="p-3.5">
-                          <div className="flex items-center gap-1.5">
-                            <input
-                              type="text"
-                              value={currentVal}
-                              placeholder="ຕົວຢ່າງ: MILK-01"
-                              onChange={(e) => setInputSkus(prev => ({ ...prev, [supplierKey]: e.target.value }))}
-                              className="h-8 px-2.5 rounded-lg bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono font-bold outline-none focus:border-indigo-500 w-full"
-                            />
-                            <button
-                              type="button"
-                              disabled={mappingUpdatingId === supplierKey}
-                              onClick={() => handleSaveSkuMapping(supplierKey, item.rawId, item.supplier, item.rawName)}
-                              className="h-8 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-50"
-                            >
-                              <Save className="w-3 h-3" />
-                              <span>{mappingUpdatingId === supplierKey ? '...' : 'ບັນທຶກ'}</span>
-                            </button>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={currentVal}
+                                placeholder="ຕົວຢ່າງ: MILK-01"
+                                onChange={(e) => setInputSkus(prev => ({ ...prev, [supplierKey]: e.target.value }))}
+                                className="h-8 px-2.5 rounded-lg bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono font-bold outline-none focus:border-indigo-500 w-full"
+                              />
+                              <button
+                                type="button"
+                                disabled={mappingUpdatingId === supplierKey}
+                                onClick={() => handleSaveSkuMapping(supplierKey, item.rawId, item.supplier, item.rawName)}
+                                className="h-8 px-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-50"
+                                title="ບັນທຶກສະເພາະຮ້ານນີ້"
+                              >
+                                <Save className="w-3 h-3" />
+                                <span>{mappingUpdatingId === supplierKey ? '...' : 'ບັນທຶກ'}</span>
+                              </button>
+                            </div>
+
+                            {/* ⚡ ປຸ່ມນຳໃຊ້ກັບທຸກຮ້ານທີ່ມີຊື່ຄືກັນ */}
+                            {currentVal && (
+                              <button
+                                type="button"
+                                onClick={() => handleApplyToAllSimilar(item.rawName, currentVal)}
+                                className="text-[9.5px] text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 font-bold flex items-center gap-1 cursor-pointer transition-all"
+                              >
+                                <CheckCheck className="w-3 h-3" />
+                                <span>ໃຊ້ SKU ນີ້ກັບທຸກຮ້ານທີ່ຂຽນ "{item.rawName}"</span>
+                              </button>
+                            )}
                           </div>
                         </td>
 
