@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { 
-  collection, onSnapshot, doc, setDoc, updateDoc, 
+  collection, onSnapshot, doc, setDoc, updateDoc, addDoc,
   serverTimestamp, getDoc 
 } from 'firebase/firestore';
 import { 
   Scale, Calculator, Save, 
   Calendar, Search, Percent, Package, 
   ArrowUpRight, ArrowDownRight, Info, AlertTriangle, 
-  Link2, Check, Download
+  Link2, Check, Download, Plus
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { utils, writeFile } from 'xlsx';
@@ -48,6 +48,9 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const [skuMappings, setSkuMappings] = useState<Record<string, any>>({});
   const [saving, setSaving] = useState(false);
   const [mappingUpdatingId, setMappingUpdatingId] = useState<string | null>(null);
+
+  // State ສຳລັບເກັບຄ່າ SKU ທີ່ກຳລັງພິມໃນແຕ່ລະແຖວ
+  const [inputSkus, setInputSkus] = useState<Record<string, string>>({});
 
   // ເລືອກເດືອນທີ່ຈະສະຫຼຸບ (Format: YYYY-MM)
   const [selectedMonth, setSelectedMonth] = useState<string>(() => format(new Date(), 'yyyy-MM'));
@@ -104,7 +107,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     loadMonthlyStockCount();
   }, [currentBranch, selectedMonth]);
 
-  // 3. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier ເພື່ອນຳມາຈັບຄູ່ SKU
+  // 3. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier ເພື່ອນຳມາພິມຈັບຄູ່ SKU
   const distinctSupplierItems = useMemo(() => {
     const map: Record<string, {
       rawId: string;
@@ -143,24 +146,40 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     return Object.values(map);
   }, [supplierPrices, products, skuMappings]);
 
-  // ຈຳນວນລາຍການທີ່ຍັງບໍ່ທັນໄດ້ຈັບຄູ່ SKU
+  // ຈຳນວນລາຍການທີ່ຍັງບໍ່ທັນມີ SKU
   const unlinkedCount = useMemo(() => {
     return distinctSupplierItems.filter(item => !item.currentSku).length;
   }, [distinctSupplierItems]);
 
-  // 4. ບັນທຶກການຈັບຄູ່ SKU & ອັບເດດບິນເກົ່າທັນທີ
-  const handleSaveSkuMapping = async (supplierKey: string, rawId: string, supplier: string, targetSku: string) => {
-    if (!targetSku) return;
+  // 4. ບັນທຶກ SKU (ຂຽນເອງ + ສ້າງສິນຄ້າໃນ Inventory ອັດຕະໂນມັດຖ້າຍັງບໍ່ມີ)
+  const handleSaveSkuMapping = async (supplierKey: string, rawId: string, supplier: string, rawName: string) => {
+    const targetSku = (inputSkus[supplierKey] !== undefined ? inputSkus[supplierKey] : (skuMappings[supplierKey]?.targetSku || '')).trim();
+    if (!targetSku) {
+      alert('ກະລຸນາພິມເລກ SKU ກ່ອນກົດບັນທຶກ!');
+      return;
+    }
+
     try {
       setMappingUpdatingId(supplierKey);
 
-      const targetProduct = products.find(p => p.sku === targetSku);
+      // ກວດເບິ່ງວ່າມີສິນຄ້າທີ່ມີ SKU ນີ້ໃນ Inventory ແລ້ວຫຼືຍັງ
+      let targetProduct = products.find(p => (p.sku || '').toLowerCase() === targetSku.toLowerCase());
+
+      // 🌟 ຖ້າຍັງບໍ່ມີໃນ Inventory -> ສ້າງສິນຄ້າໃໝ່ລົງ `products` ອັດຕະໂນມັດທັນທີ!
       if (!targetProduct) {
-        alert('ບໍ່ພົບສິນຄ້າທີ່ມີ SKU ນີ້ໃນ Inventory!');
-        return;
+        const newProdRef = await addDoc(collection(db, 'products'), {
+          name: rawName || targetSku,
+          sku: targetSku,
+          unit: 'UNIT',
+          category: 'Raw Material',
+          cost: 0,
+          isApproved: true,
+          createdAt: serverTimestamp()
+        });
+        targetProduct = { id: newProdRef.id, name: rawName, sku: targetSku, unit: 'UNIT' };
       }
 
-      // 1. ບັນທຶກລົງ sku_mappings ເພື່ອຈື່ຈຳໄວ້
+      // 1. ບັນທຶກລົງ `sku_mappings`
       await setDoc(doc(db, 'sku_mappings', supplierKey), {
         supplierKey,
         rawId,
@@ -171,7 +190,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         updatedAt: serverTimestamp()
       });
 
-      // 2. ອັບເດດບິນເກົ່າທັງໝົດຂອງ Supplier ນີ້ໃຫ້ມີ SKU ດຽວກັນທັນທີ
+      // 2. ອັບເດດບິນເກົ່າທັງໝົດຂອງ Supplier ນີ້ໃຫ້ມີ SKU ດຽວກັນ
       const matchingBills = supplierPrices.filter(sp => (sp.productId === rawId || sp.id === rawId) && sp.supplier === supplier);
       for (const bill of matchingBills) {
         await updateDoc(doc(db, 'supplierPrices', bill.id), {
@@ -180,9 +199,9 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         });
       }
 
-      alert(`ຈັບຄູ່ສຳເລັດ! ອັບເດດ SKU "${targetSku}" ໃສ່ບິນເກົ່າຈຳນວນ ${matchingBills.length} ບິນຮຽບຮ້ອຍ.`);
+      alert(`✅ ບັນທຶກ SKU "${targetSku}" ສຳເລັດ! (ອັບເດດບິນເກົ່າ ${matchingBills.length} ບິນ ແລະ ເພີ່ມລົງ Inventory ຮຽບຮ້ອຍ)`);
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      alert('Error updating SKU: ' + err.message);
     } finally {
       setMappingUpdatingId(null);
     }
@@ -203,7 +222,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       }
     });
 
-    // ສ້າງຕາຕະລາງ WAC ໂດຍອີງໃສ່ SKU ຂອງ Inventory
     const skuLedger: Record<string, {
       product: any;
       totalPurchasedQty: number;
@@ -214,7 +232,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }> = {};
 
     products.forEach(p => {
-      const skuKey = p.sku || p.id;
+      const skuKey = (p.sku || p.id).trim();
       skuLedger[skuKey] = {
         product: p,
         totalPurchasedQty: 0,
@@ -227,7 +245,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
     supplierPrices.forEach(sp => {
       const rawKey = `${sp.supplier}_${sp.productId}`;
-      const resolvedSku = sp.sku || skuMappings[rawKey]?.targetSku || products.find(p => p.id === sp.productId)?.sku;
+      const resolvedSku = (sp.sku || skuMappings[rawKey]?.targetSku || products.find(p => p.id === sp.productId)?.sku || '').trim();
 
       if (!resolvedSku || !skuLedger[resolvedSku]) return;
 
@@ -247,7 +265,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       }
     });
 
-    // ຄິດໄລ່ WAC ຕໍ່ SKU
     Object.values(skuLedger).forEach(ledger => {
       if (ledger.totalPurchasedQty > 0) {
         ledger.wac = ledger.totalPurchasedValue / ledger.totalPurchasedQty;
@@ -256,19 +273,17 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       }
     });
 
-    // ມູນຄ່າສາງເຫຼືອຕົວຈິງ (Ending Stock Valuation)
     let totalEndingInventoryValue = 0;
     let totalPurchasesThisMonth = 0;
 
     const roster = products.map(p => {
-      const skuKey = p.sku || p.id;
+      const skuKey = (p.sku || p.id).trim();
       const ledger = skuLedger[skuKey];
       const count = physicalCounts[p.id] || { fullUnits: 0, partialPercent: 0 };
       
       const fullUnits = Number(count.fullUnits) || 0;
       const partialPercent = Math.min(100, Math.max(0, Number(count.partialPercent) || 0));
       
-      // ຈຳນວນເຫຼືອ: ເຕັມໜ່ວຍ + (% ທີ່ເຫຼືອ / 100)
       const effectiveRemainingQty = fullUnits + (partialPercent / 100);
       const wacCost = ledger?.wac || 0;
       const endingValue = effectiveRemainingQty * wacCost;
@@ -290,7 +305,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       };
     });
 
-    // Actual COGS = Purchases - Ending Stock
     const actualCogs = Math.max(0, totalPurchasesThisMonth - totalEndingInventoryValue);
     const grossProfit = monthRevenue - actualCogs;
     const grossMargin = monthRevenue > 0 ? (grossProfit / monthRevenue) * 100 : 0;
@@ -397,7 +411,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
             }`}
           >
             <Link2 className="w-3.5 h-3.5" />
-            <span>2. ຈັບຄູ່ SKU ({distinctSupplierItems.length})</span>
+            <span>2. ປ້ອນ / ຈັບຄູ່ SKU ({distinctSupplierItems.length})</span>
             {unlinkedCount > 0 && (
               <span className="px-1.5 py-0.2 text-[9px] font-black rounded-full bg-amber-500 text-white animate-pulse">
                 {unlinkedCount}
@@ -407,20 +421,20 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         </div>
       </div>
 
-      {/* ແຈ້ງເຕືອນຖ້າຍັງມີລາຍການບໍ່ທັນໄດ້ຈັບຄູ່ */}
+      {/* ແຈ້ງເຕືອນຖ້າມີລາຍການຍັງບໍ່ທັນມີ SKU */}
       {unlinkedCount > 0 && activeTab === 'stocktake' && (
         <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
             <span className="text-slate-700 dark:text-slate-200">
-              ພົບເຫັນ <strong className="text-amber-600 dark:text-amber-400">{unlinkedCount} ລາຍການ</strong> ຈາກ Supplier ທີ່ຍັງບໍ່ທັນໄດ້ຈັບຄູ່ SKU ກັບ Inventory.
+              ພົບເຫັນ <strong className="text-amber-600 dark:text-amber-400">{unlinkedCount} ລາຍການ</strong> ຈາກ Supplier ທີ່ຍັງບໍ່ທັນໄດ້ໃສ່ SKU.
             </span>
           </div>
           <button
             onClick={() => setActiveTab('sku_mapping')}
             className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-[10px] font-black uppercase cursor-pointer"
           >
-            ໄປຈັບຄູ່ SKU ດຽວນີ້
+            ໄປໃສ່ເລກ SKU ດຽວນີ້
           </button>
         </div>
       )}
@@ -596,7 +610,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       )}
 
       {/* ======================================================== */}
-      {/* ແທັບທີ 2: ສູນຈັບຄູ່ SKU (SKU MAPPING & MEMORY HUB) */}
+      {/* ແທັບທີ 2: ສູນປ້ອນ / ຈັບຄູ່ SKU ດ້ວຍຕົນເອງ (CUSTOM SKU INPUT) */}
       {/* ======================================================== */}
       {activeTab === 'sku_mapping' && (
         <div className="bg-white dark:bg-[#073069] rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl overflow-hidden space-y-4">
@@ -604,10 +618,10 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
             <div>
               <h3 className="text-xs font-black uppercase text-slate-800 dark:text-white flex items-center gap-2">
                 <Link2 className="w-4 h-4 text-indigo-500" />
-                <span>ສູນຈັບຄູ່ SKU ສິນຄ້າ (Supplier ➔ Inventory SKU)</span>
+                <span>ສູນປ້ອນ / ຈັບຄູ່ເລກ SKU ສິນຄ້າ (Supplier ➔ Inventory SKU)</span>
               </h3>
               <p className="text-[10.5px] text-slate-400 mt-0.5">
-                ຈັບຄູ່ລາຍການຈາກບິນ Supplier ເຂົ້າກັບ SKU ຂອງສິນຄ້າໃນ Inventory. ເມື່ອກົດເລືອກ ລະບົບຈະຈື່ໄວ້ ແລະ ອັບເດດບິນເກົ່າທັງໝົດທັນທີ.
+                ທ່ານສາມາດ<strong>ພິມເລກ SKU ໃສ່ເອງໄດ້ໂດຍກົງ</strong>. ຖ້າ SKU ໃດຍັງບໍ່ມີໃນ Inventory ລະບົບຈະສ້າງສິນຄ້າໃໝ່ລົງຄັງ ແລະ ອັບເດດບິນເກົ່າໃຫ້ທັນທີ!
               </p>
             </div>
 
@@ -629,8 +643,8 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                 <tr>
                   <th className="p-3.5">Supplier</th>
                   <th className="p-3.5">ລາຍການສິນຄ້າໃນບິນຈັດຊື້</th>
-                  <th className="p-3.5 text-center">ຈຳນວນບິນທີ່ເຄີຍຊື້</th>
-                  <th className="p-3.5">ເລືອກຈັບຄູ່ກັບ Inventory SKU</th>
+                  <th className="p-3.5 text-center">ຈຳນວນບິນທີ່ຊື້</th>
+                  <th className="p-3.5 w-72">ພິມເລກ SKU (ປ້ອນດ້ວຍຕົນເອງ)</th>
                   <th className="p-3.5 text-center">ສະຖານະ</th>
                 </tr>
               </thead>
@@ -642,6 +656,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                   )
                   .map(item => {
                     const supplierKey = `${item.supplier}_${item.rawId}`;
+                    const currentVal = inputSkus[supplierKey] !== undefined ? inputSkus[supplierKey] : (item.currentSku || '');
                     const isLinked = !!item.currentSku;
 
                     return (
@@ -660,34 +675,37 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                           </span>
                         </td>
 
-                        {/* Dropdown ເລືອກ SKU ຂອງ Inventory */}
+                        {/* ✍️ ຊ່ອງພິມ SKU ເອງ + ປຸ່ມບັນທຶກ */}
                         <td className="p-3.5">
-                          <div className="flex items-center gap-2">
-                            <select
-                              value={item.currentSku || ''}
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              value={currentVal}
+                              placeholder="ຕົວຢ່າງ: MILK-01"
+                              onChange={(e) => setInputSkus(prev => ({ ...prev, [supplierKey]: e.target.value }))}
+                              className="h-8 px-2.5 rounded-lg bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono font-bold outline-none focus:border-indigo-500 w-full"
+                            />
+                            <button
+                              type="button"
                               disabled={mappingUpdatingId === supplierKey}
-                              onChange={(e) => handleSaveSkuMapping(supplierKey, item.rawId, item.supplier, e.target.value)}
-                              className="h-8 px-2 rounded-lg bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-bold outline-none cursor-pointer max-w-xs w-full"
+                              onClick={() => handleSaveSkuMapping(supplierKey, item.rawId, item.supplier, item.rawName)}
+                              className="h-8 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-50"
                             >
-                              <option value="">-- ເລືອກສິນຄ້າ Inventory (SKU) --</option>
-                              {products.map(prod => (
-                                <option key={prod.id} value={prod.sku || prod.id}>
-                                  [{prod.sku || 'No-SKU'}] {prod.name} ({prod.unit})
-                                </option>
-                              ))}
-                            </select>
+                              <Save className="w-3 h-3" />
+                              <span>{mappingUpdatingId === supplierKey ? '...' : 'ບັນທຶກ'}</span>
+                            </button>
                           </div>
                         </td>
 
                         {/* ສະຖານະການຈັບຄູ່ */}
                         <td className="p-3.5 text-center">
                           {isLinked ? (
-                            <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[9.5px] uppercase inline-flex items-center gap-1">
-                              <Check className="w-3 h-3" /> ຈັບຄູ່ແລ້ວ
+                            <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[9.5px] font-mono inline-flex items-center gap-1">
+                              <Check className="w-3 h-3" /> {item.currentSku}
                             </span>
                           ) : (
                             <span className="px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-[9.5px] uppercase inline-flex items-center gap-1">
-                              <AlertTriangle className="w-3 h-3" /> ຍັງບໍ່ທັນຈັບຄູ່
+                              <AlertTriangle className="w-3 h-3" /> ຍັງບໍ່ມີ SKU
                             </span>
                           )}
                         </td>
