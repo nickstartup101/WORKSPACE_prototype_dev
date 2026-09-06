@@ -10,7 +10,7 @@ import {
   ArrowUpRight, ArrowDownRight, Info, AlertTriangle, 
   Link2, Check, Download, Zap, Sparkles, CheckCheck,
   CheckSquare, Square, Filter, ChevronLeft, ChevronRight,
-  Plus, Settings, Tags, X
+  Plus, Tags, X
 } from 'lucide-react';
 import { format, subMonths, addMonths } from 'date-fns';
 import { utils, writeFile } from 'xlsx';
@@ -23,21 +23,6 @@ const LAO_MONTHS = [
   'ກັນຍາ (Sep)', 'ຕຸລາ (Oct)', 'ພະຈິກ (Nov)', 'ທັນວາ (Dec)'
 ];
 
-// 🇱🇦 ລະບົບຕັດວັນນະຍຸດ + ຕັດຂະໜາດຕົວເລກອອກ (Lao Deep Normalizer)
-export const normalizeLaoDeep = (str: string): string => {
-  if (!str) return '';
-  return str
-    .toLowerCase()
-    // ຕັດວັນນະຍຸດລາວ & ໄທ
-    .replace(/[\u0EC8-\u0ECC\u0E48-\u0E4C]/g, '')
-    // ຕັດຄຳບອກຂະໜາດທົ່ວໄປເຊັ່ນ: 95mm, 98mm, 16oz, 22oz, 500g, 1kg
-    .replace(/\b(\d+mm|\d+oz|\d+g|\d+kg|\d+ml|\d+l)\b/g, '')
-    // ຕັດຕົວເລກ ແລະ ເຄື່ອງໝາຍພິເສດ
-    .replace(/[0-9\-_./\\()[\]]/g, '')
-    .replace(/\s+/g, '')
-    .trim();
-};
-
 interface PhysicalCountRow {
   fullUnits: number;
   partialPercent: number;
@@ -46,7 +31,7 @@ interface PhysicalCountRow {
 interface CustomCategory {
   id: string;
   name: string;
-  isCogs: boolean; // ເລືອກວ່ານັບເຂົ້າ COGS ຫຼື ບໍ່
+  isCogs: boolean;
 }
 
 const DEFAULT_CATEGORIES: CustomCategory[] = [
@@ -59,6 +44,39 @@ const DEFAULT_CATEGORIES: CustomCategory[] = [
 export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: string; userSettings?: any }) {
   const { i18n } = useTranslation();
   const currentBranch = selectedBranch || 'branch_1';
+
+  // 🛡️ ຟັງຊັນແປງວັນທີ (ວາງໄວ້ທາງໃນ Component ເພື່ອປ້ອງກັນ ReferenceError 100%)
+  const toStandardDate = (raw: any): string => {
+    if (!raw) return '';
+    if (typeof raw === 'string') {
+      const clean = raw.trim().split('T')[0];
+      if (clean.includes('-')) {
+        const parts = clean.split('-');
+        if (parts.length === 3) return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+      }
+      return clean;
+    }
+    if (raw && typeof raw.toDate === 'function') {
+      try { return format(raw.toDate(), 'yyyy-MM-dd'); } catch { return ''; }
+    }
+    return '';
+  };
+
+  // 🛡️ ຟັງຊັນປົດວັນນະຍຸດລາວແບບປອດໄພ
+  const normalizeLaoDeep = (str: any): string => {
+    if (!str || typeof str !== 'string') return '';
+    try {
+      return str
+        .toLowerCase()
+        .replace(/[\u0EC8-\u0ECC\u0E48-\u0E4C]/g, '')
+        .replace(/\b(\d+mm|\d+oz|\d+g|\d+kg|\d+ml|\d+l)\b/g, '')
+        .replace(/[0-9\-_./\\()[\]]/g, '')
+        .replace(/\s+/g, '')
+        .trim();
+    } catch {
+      return '';
+    }
+  };
 
   const [activeTab, setActiveTab] = useState<'stocktake' | 'sku_mapping'>('stocktake');
 
@@ -77,7 +95,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const [newCatName, setNewCatName] = useState('');
   const [newCatIsCogs, setNewCatIsCogs] = useState(true);
 
-  // ປະຕິທິນ: ເລືອກເດືອນ (Date Object)
+  // ປະຕິທິນ: ເລືອກເດືອນ
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const selectedMonth = useMemo(() => format(currentDate, 'yyyy-MM'), [currentDate]);
 
@@ -98,7 +116,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const [mappingSearch, setMappingSearch] = useState('');
   const [physicalCounts, setPhysicalCounts] = useState<Record<string, PhysicalCountRow>>({});
 
-  // 1. ດຶງຂໍ້ມູນ Real-time + Categories ຈາກ Firestore
+  // 1. ດຶງຂໍ້ມູນ Real-time ຈາກ Firestore
   useEffect(() => {
     const unsubP = onSnapshot(collection(db, 'products'), snap => {
       const prods = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -130,12 +148,11 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       setSkuMappings(mapData);
     });
 
-    // ດຶງ Custom Categories
     const unsubC = onSnapshot(doc(db, 'settings', 'cogs_categories'), snap => {
-      if (snap.exists() && snap.data().categories) {
+      if (snap.exists() && Array.isArray(snap.data()?.categories)) {
         setCustomCategories(snap.data().categories);
       }
-    });
+    }, () => {});
 
     return () => {
       unsubP();
@@ -168,11 +185,9 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     loadMonthlyStockCount();
   }, [currentBranch, selectedMonth]);
 
-  // 3. ປຸ່ມປ່ຽນເດືອນ (ປະຕິທິນ)
   const handlePrevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
   const handleNextMonth = () => setCurrentDate(prev => addMonths(prev, 1));
 
-  // 4. ຈັດການກຸ່ມສິນຄ້າ (Custom Categories)
   const handleAddCategory = async () => {
     if (!newCatName.trim()) return;
     const newCat: CustomCategory = {
@@ -182,23 +197,25 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     };
     const updated = [...customCategories, newCat];
     setCustomCategories(updated);
-    await setDoc(doc(db, 'settings', 'cogs_categories'), { categories: updated }, { merge: true });
+    try {
+      await setDoc(doc(db, 'settings', 'cogs_categories'), { categories: updated }, { merge: true });
+    } catch {}
     setNewCatName('');
   };
 
   const handleDeleteCategory = async (catId: string) => {
     const updated = customCategories.filter(c => c.id !== catId);
     setCustomCategories(updated);
-    await setDoc(doc(db, 'settings', 'cogs_categories'), { categories: updated }, { merge: true });
+    try {
+      await setDoc(doc(db, 'settings', 'cogs_categories'), { categories: updated }, { merge: true });
+    } catch {}
   };
 
-  // ປ່ຽນກຸ່ມຂອງສິນຄ້າໂດຍກົງໃນຕາຕະລາງ
   const handleUpdateProductCategory = async (productId: string, newCategoryName: string) => {
     try {
       await updateDoc(doc(db, 'products', productId), {
         category: newCategoryName
       });
-      // ຖ້າກຸ່ມໃໝ່ຖືກຕັ້ງວ່າບໍ່ແມ່ນ COGS ໃຫ້ຕິກອອກອັດຕະໂນມັດ
       const matchedCat = customCategories.find(c => c.name === newCategoryName);
       if (matchedCat) {
         setSelectedProductIds(prev => {
@@ -212,7 +229,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }
   };
 
-  // 5. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier + ລະບົບ Cross-Supplier Suggestion
+  // 3. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier
   const distinctSupplierItems = useMemo(() => {
     const map: Record<string, {
       rawId: string;
@@ -225,17 +242,17 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       suggestedSource?: string;
     }> = {};
 
-    // ສ້າງວັດຈະນານຸກົມຊື່ທີ່ເຄີຍຈັບຄູ່ແລ້ວ (Knowledge Base)
     const existingNameMap: Record<string, string> = {};
-    Object.values(skuMappings).forEach((m: any) => {
-      if (m.rawName && m.targetSku) {
-        existingNameMap[normalizeLaoDeep(m.rawName)] = m.targetSku;
+    Object.values(skuMappings || {}).forEach((m: any) => {
+      if (m && m.rawName && m.targetSku) {
+        const norm = normalizeLaoDeep(String(m.rawName));
+        if (norm) existingNameMap[norm] = String(m.targetSku);
       }
     });
 
-    supplierPrices.forEach(sp => {
-      const rawId = sp.productId || 'unknown';
-      const supplier = sp.supplier || 'Unknown';
+    (supplierPrices || []).forEach(sp => {
+      const rawId = String(sp.productId || 'unknown');
+      const supplier = String(sp.supplier || 'Unknown');
       const key = `${supplier}_${rawId}`;
       const safeKey = key.replace(/[\/\s]/g, '_');
 
@@ -245,30 +262,26 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
       if (!map[key]) {
         const matchedOldProd = products.find(p => p.id === rawId);
-        const rawName = matchedOldProd?.name || sp.remark || rawId;
-        const currentSku = sp.sku || skuMappings[safeKey]?.targetSku || skuMappings[key]?.targetSku || matchedOldProd?.sku || '';
+        const rawName = String(matchedOldProd?.name || sp.remark || rawId);
+        const currentSku = String(sp.sku || skuMappings[safeKey]?.targetSku || skuMappings[key]?.targetSku || matchedOldProd?.sku || '');
 
-        // 🌟 ຊອກຫາ ຄຳແນະນຳ (Suggested SKU) ທີ່ສະຫຼາດຂຶ້ນ:
         let suggestedSku = '';
         let suggestedSource = '';
 
         if (!currentSku) {
           const deepNormRaw = normalizeLaoDeep(rawName);
 
-          // 1) ຊອກຫາຈາກຮ້ານອື່ນທີ່ເຄີຍຈັບຄູ່ໄປແລ້ວ (ເຊັ່ນ ຮ້ານ A ເຄີຍໃສ່ "ຝາໂດມ" ແລ້ວ)
-          if (existingNameMap[deepNormRaw]) {
+          if (deepNormRaw && existingNameMap[deepNormRaw]) {
             suggestedSku = existingNameMap[deepNormRaw];
             suggestedSource = 'ເຄີຍຈັບຄູ່ຈາກຮ້ານອື່ນ';
-          } 
-          // 2) ຊອກຫາຈາກ Inventory Products
-          else {
+          } else if (deepNormRaw) {
             const foundMatch = products.find(p => {
-              const deepNormP = normalizeLaoDeep(p.name);
+              const deepNormP = normalizeLaoDeep(String(p?.name || ''));
               return deepNormP && (deepNormRaw === deepNormP || deepNormRaw.includes(deepNormP) || deepNormP.includes(deepNormRaw));
             });
             if (foundMatch && foundMatch.sku) {
-              suggestedSku = foundMatch.sku;
-              suggestedSource = foundMatch.name;
+              suggestedSku = String(foundMatch.sku);
+              suggestedSource = String(foundMatch.name || 'Inventory');
             }
           }
         }
@@ -296,9 +309,8 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     return distinctSupplierItems.filter(item => !item.currentSku).length;
   }, [distinctSupplierItems]);
 
-  // 6. ບັນທຶກ SKU
   const handleSaveSkuMapping = async (supplierKey: string, rawId: string, supplier: string, rawName: string, customSkuToSave?: string) => {
-    const targetSku = (customSkuToSave !== undefined 
+    const targetSku = String(customSkuToSave !== undefined 
       ? customSkuToSave 
       : (inputSkus[supplierKey] !== undefined ? inputSkus[supplierKey] : (skuMappings[supplierKey.replace(/[\/\s]/g, '_')]?.targetSku || ''))
     ).trim();
@@ -311,7 +323,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     try {
       setMappingUpdatingId(supplierKey);
 
-      let targetProduct = products.find(p => (p.sku || '').toLowerCase() === targetSku.toLowerCase());
+      let targetProduct = products.find(p => String(p?.sku || '').toLowerCase() === targetSku.toLowerCase());
       if (!targetProduct) {
         try {
           const newProdRef = await addDoc(collection(db, 'products'), {
@@ -359,7 +371,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }
   };
 
-  // ⚡ ນຳໃຊ້ SKU ນີ້ກັບທຸກຮ້ານທີ່ຂຽນຄືກັນ (ເຊັ່ນ ຝາໂດມ)
   const handleApplyToAllSimilar = async (sourceRawName: string, targetSku: string) => {
     if (!targetSku) return;
     const deepNormSource = normalizeLaoDeep(sourceRawName);
@@ -398,7 +409,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }
   };
 
-  // ⚡ Auto-Match All (ຈັບຄູ່ອັດຕະໂນມັດ)
   const handleSmartAutoMatchAll = async () => {
     try {
       setAutoMatchingLoading(true);
@@ -410,7 +420,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         if (!deepNormRaw) continue;
 
         const matchedProd = products.find(p => {
-          const deepNormP = normalizeLaoDeep(p.name);
+          const deepNormP = normalizeLaoDeep(String(p?.name || ''));
           return deepNormP && (deepNormRaw === deepNormP || deepNormRaw.includes(deepNormP) || deepNormP.includes(deepNormRaw));
         });
 
@@ -441,13 +451,13 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }
   };
 
-  // 7. ຄິດໄລ່ WAC & Actual COGS
+  // 4. ຄິດໄລ່ WAC & Actual COGS (Safe Calculation)
   const calculationResults = useMemo(() => {
     const monthStart = `${selectedMonth}-01`;
     const monthEnd = `${selectedMonth}-31`;
 
     let monthRevenue = 0;
-    transactions.forEach(tx => {
+    (transactions || []).forEach(tx => {
       const d = toStandardDate(tx.date || tx.createdAt);
       if (d >= monthStart && d <= monthEnd) {
         if (tx.type === 'income' || String(tx.category || '').toLowerCase() === 'sales') {
@@ -465,8 +475,8 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       wac: number;
     }> = {};
 
-    products.forEach(p => {
-      const skuKey = (p.sku || p.id).trim();
+    (products || []).forEach(p => {
+      const skuKey = String(p?.sku || p?.id || '').trim();
       skuLedger[skuKey] = {
         product: p,
         totalPurchasedQty: 0,
@@ -477,10 +487,10 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       };
     });
 
-    supplierPrices.forEach(sp => {
+    (supplierPrices || []).forEach(sp => {
       const rawKey = `${sp.supplier}_${sp.productId}`;
       const safeKey = rawKey.replace(/[\/\s]/g, '_');
-      const resolvedSku = (
+      const resolvedSku = String(
         sp.sku || 
         skuMappings[safeKey]?.targetSku || 
         skuMappings[rawKey]?.targetSku || 
@@ -510,7 +520,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       if (ledger.totalPurchasedQty > 0) {
         ledger.wac = ledger.totalPurchasedValue / ledger.totalPurchasedQty;
       } else {
-        ledger.wac = Number(ledger.product.cost || 0);
+        ledger.wac = Number(ledger.product?.cost || 0);
       }
     });
 
@@ -518,9 +528,9 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     let totalPurchasesThisMonth = 0;
     let totalSelectedItemsCount = 0;
 
-    const roster = products.map(p => {
+    const roster = (products || []).map(p => {
       const isSelected = selectedProductIds[p.id] !== false;
-      const skuKey = (p.sku || p.id).trim();
+      const skuKey = String(p?.sku || p?.id || '').trim();
       const ledger = skuLedger[skuKey];
       const count = physicalCounts[p.id] || { fullUnits: 0, partialPercent: 0 };
       
@@ -540,7 +550,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       return {
         id: p.id,
         sku: p.sku || '-',
-        name: p.name,
+        name: p.name || 'Unnamed',
         category: p.category || 'ວັດຖຸດິບ (Raw Material)',
         unit: p.unit || 'UNIT',
         fullUnits,
@@ -641,7 +651,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
               {i18n.language === 'la' ? 'ສະຫຼຸບຕົ້ນທຶນ COGS & ຈັບຄູ່ SKU' : 'COGS Intelligence & SKU Hub'}
             </h2>
             
-            {/* 🌟 ປະຕິທິນ 2 ພາສາ (Lao - English Calendar Picker) */}
+            {/* ປະຕິທິນ 2 ພາສາ */}
             <div className="flex items-center gap-2 mt-1">
               <button 
                 onClick={handlePrevMonth}
@@ -792,7 +802,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                 </div>
               </div>
 
-              {/* 🌟 ປຸ່ມຄວບຄຸມການຕິກເລືອກ + Filter ຕາມກຸ່ມ */}
+              {/* ປຸ່ມຄວບຄຸມການຕິກເລືອກ + Filter ຕາມກຸ່ມ */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-white/5">
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
@@ -872,8 +882,10 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                 <tbody className="divide-y divide-slate-100 dark:divide-white/5">
                   {calculationResults.roster
                     .filter(r => {
-                      const matchSearch = r.name.toLowerCase().includes(searchItem.toLowerCase()) || r.sku.toLowerCase().includes(searchItem.toLowerCase());
-                      const matchCat = categoryFilter === 'all' || r.category.toLowerCase() === categoryFilter.toLowerCase();
+                      const matchSearch = String(r.name || '').toLowerCase().includes(searchItem.toLowerCase()) || 
+                                          String(r.sku || '').toLowerCase().includes(searchItem.toLowerCase());
+                      const matchCat = categoryFilter === 'all' || 
+                                       String(r.category || '').toLowerCase() === String(categoryFilter || '').toLowerCase();
                       return matchSearch && matchCat;
                     })
                     .map(item => (
@@ -915,7 +927,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                           )}
                         </td>
 
-                        {/* 🌟 Dropdown ເລືອກກຸ່ມສິນຄ້າໂດຍກົງໃນຕາຕະລາງ */}
                         <td className="p-3.5">
                           <select
                             value={item.category}
@@ -981,7 +992,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       )}
 
       {/* ======================================================== */}
-      {/* ແທັບທີ 2: ສູນປ້ອນ / ຈັບຄູ່ SKU ດ້ວຍຕົນເອງ (SMART SKU HUB) */}
+      {/* ແທັບທີ 2: ສູນປ້ອນ / ຈັບຄູ່ SKU ດ້ວຍຕົນເອງ */}
       {/* ======================================================== */}
       {activeTab === 'sku_mapping' && (
         <div className="bg-white dark:bg-[#073069] rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl overflow-hidden space-y-4">
@@ -1002,7 +1013,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
             </div>
 
             <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-              {/* 🌟 ປຸ່ມ Filter ສະເພາະທີ່ຍັງບໍ່ທັນຈັບຄູ່ */}
               <div className="flex bg-slate-100 dark:bg-black/20 p-1 rounded-xl text-[10px] font-black uppercase">
                 <button
                   onClick={() => setMappingFilter('unmapped')}
@@ -1055,7 +1065,8 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
               <tbody className="divide-y divide-slate-100 dark:divide-white/5">
                 {distinctSupplierItems
                   .filter(item => {
-                    const matchSearch = item.supplier.toLowerCase().includes(mappingSearch.toLowerCase()) || item.rawName.toLowerCase().includes(mappingSearch.toLowerCase());
+                    const matchSearch = item.supplier.toLowerCase().includes(mappingSearch.toLowerCase()) || 
+                                        item.rawName.toLowerCase().includes(mappingSearch.toLowerCase());
                     const matchFilter = mappingFilter === 'all' ? true : (mappingFilter === 'unmapped' ? !item.currentSku : !!item.currentSku);
                     return matchSearch && matchFilter;
                   })
@@ -1073,7 +1084,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                         <td className="p-3.5">
                           <p className="font-bold text-slate-800 dark:text-white">{item.rawName}</p>
                           
-                          {/* 🌟 ປ້າຍແນະນຳ SKU ທີ່ສະຫຼາດຂຶ້ນ (ແນະນຳຈາກຮ້ານອື່ນທີ່ເຄີຍໃສ່ໄວ້) */}
                           {!isLinked && item.suggestedSku && (
                             <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                               <span className="text-[9.5px] text-amber-600 dark:text-amber-400 flex items-center gap-1 font-bold">
@@ -1097,7 +1107,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                           </span>
                         </td>
 
-                        {/* ✍️ ຊ່ອງພິມ SKU + ປຸ່ມບັນທຶກ + ປຸ່ມນຳໃຊ້ກັບທຸກຮ້ານ */}
                         <td className="p-3.5">
                           <div className="space-y-1.5">
                             <div className="flex items-center gap-1.5">
@@ -1120,7 +1129,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                               </button>
                             </div>
 
-                            {/* ⚡ ປຸ່ມນຳໃຊ້ກັບທຸກຮ້ານທີ່ມີຊື່ຄ້າຍຄືກັນ (ເຊັ່ນ ຝາໂດມ) */}
                             {currentVal && (
                               <button
                                 type="button"
@@ -1154,9 +1162,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         </div>
       )}
 
-      {/* ======================================================== */}
-      {/* 🌟 MODAL ຈັດການກຸ່ມສິນຄ້າ (CATEGORY / GROUP MANAGER) */}
-      {/* ======================================================== */}
+      {/* MODAL ຈັດການກຸ່ມສິນຄ້າ */}
       {showCategoryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-white dark:bg-[#073069] w-full max-w-lg rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-5">
@@ -1179,7 +1185,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
               ກຸ່ມທີ່ຖືກຕັ້ງຄ່າວ່າ <strong>Active COGS (Yes)</strong> ຈະຖືກດຶງມານັບເຂົ້າໃນຍອດຕົ້ນທຶນຕົວຈິງທຸກໆເດືອນອັດຕະໂນມັດ:
             </p>
 
-            {/* ຟອມສ້າງກຸ່ມໃໝ່ */}
             <div className="p-3.5 bg-slate-50 dark:bg-white/5 rounded-2xl space-y-2.5 border border-slate-200 dark:border-white/10">
               <span className="text-[10px] font-black uppercase text-slate-400">ສ້າງກຸ່ມໃໝ່</span>
               <div className="flex items-center gap-2">
@@ -1208,7 +1213,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
               </div>
             </div>
 
-            {/* ລາຍການກຸ່ມທີ່ມີໃນປັດຈຸບັນ */}
             <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
               {customCategories.map(cat => (
                 <div 
