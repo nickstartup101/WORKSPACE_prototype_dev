@@ -10,7 +10,7 @@ import {
   ArrowUpRight, ArrowDownRight, Info, AlertTriangle, 
   Link2, Check, Download, Zap, Sparkles, CheckCheck,
   CheckSquare, Square, Filter, ChevronLeft, ChevronRight,
-  Plus, Tags, X
+  Plus, Settings, Tags, X
 } from 'lucide-react';
 import { format, subMonths, addMonths } from 'date-fns';
 import { utils, writeFile } from 'xlsx';
@@ -28,24 +28,26 @@ interface PhysicalCountRow {
   partialPercent: number;
 }
 
-interface CustomCategory {
+// 🌟 ໂຄງສ້າງກົດເກນ Prefix ຂອງ SKU
+interface SkuPrefixRule {
   id: string;
-  name: string;
-  isCogs: boolean;
+  prefix: string;   // ຕົວອັກສອນຂຶ້ນຕົ້ນ ເຊັ່ນ: P, S, O, EQ
+  name: string;     // ຊື່ກຸ່ມ ເຊັ່ນ: ວັດຖຸດິບ, Packaging
+  isCogs: boolean;  // ນັບເຂົ້າ COGS ຫຼື ບໍ່
 }
 
-const DEFAULT_CATEGORIES: CustomCategory[] = [
-  { id: 'raw_material', name: 'ວັດຖຸດິບ (Raw Material)', isCogs: true },
-  { id: 'packaging', name: 'ບັນຈຸພັນ (Packaging)', isCogs: true },
-  { id: 'operating', name: 'ສິ້ນເປືອງ (Operating/OPEX)', isCogs: false },
-  { id: 'asset', name: 'ອຸປະກອນ (Equipment/Assets)', isCogs: false }
+const DEFAULT_SKU_RULES: SkuPrefixRule[] = [
+  { id: 'rule_p', prefix: 'P', name: 'ວັດຖຸດິບ (Raw Material)', isCogs: true },
+  { id: 'rule_s', prefix: 'S', name: 'ບັນຈຸພັນ (Packaging)', isCogs: true },
+  { id: 'rule_o', prefix: 'O', name: 'ສິ້ນເປືອງ (Operating/OPEX)', isCogs: false },
+  { id: 'rule_eq', prefix: 'EQ', name: 'ອຸປະກອນ (Equipment)', isCogs: false }
 ];
 
 export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: string; userSettings?: any }) {
   const { i18n } = useTranslation();
   const currentBranch = selectedBranch || 'branch_1';
 
-  // 🛡️ ຟັງຊັນແປງວັນທີ (ວາງໄວ້ທາງໃນ Component ເພື່ອປ້ອງກັນ ReferenceError 100%)
+  // 🛡️ ຟັງຊັນແປງວັນທີປອດໄພ
   const toStandardDate = (raw: any): string => {
     if (!raw) return '';
     if (typeof raw === 'string') {
@@ -62,7 +64,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     return '';
   };
 
-  // 🛡️ ຟັງຊັນປົດວັນນະຍຸດລາວແບບປອດໄພ
+  // 🛡️ ຟັງຊັນປົດວັນນະຍຸດລາວ
   const normalizeLaoDeep = (str: any): string => {
     if (!str || typeof str !== 'string') return '';
     try {
@@ -84,16 +86,17 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const [supplierPrices, setSupplierPrices] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [skuMappings, setSkuMappings] = useState<Record<string, any>>({});
-  const [customCategories, setCustomCategories] = useState<CustomCategory[]>(DEFAULT_CATEGORIES);
+  const [skuRules, setSkuRules] = useState<SkuPrefixRule[]>(DEFAULT_SKU_RULES);
 
   const [saving, setSaving] = useState(false);
   const [mappingUpdatingId, setMappingUpdatingId] = useState<string | null>(null);
   const [autoMatchingLoading, setAutoMatchingLoading] = useState(false);
 
-  // Modal ຈັດການກຸ່ມສິນຄ້າ
-  const [showCategoryModal, setShowCategoryModal] = useState(false);
-  const [newCatName, setNewCatName] = useState('');
-  const [newCatIsCogs, setNewCatIsCogs] = useState(true);
+  // Modal ຈັດການກົດເກນ SKU
+  const [showRuleModal, setShowRuleModal] = useState(false);
+  const [newPrefix, setNewPrefix] = useState('');
+  const [newRuleName, setNewRuleName] = useState('');
+  const [newRuleIsCogs, setNewRuleIsCogs] = useState(true);
 
   // ປະຕິທິນ: ເລືອກເດືອນ
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
@@ -109,14 +112,29 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }
   });
 
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [skuPrefixFilter, setSkuPrefixFilter] = useState<string>('all');
   const [mappingFilter, setMappingFilter] = useState<'all' | 'unmapped' | 'mapped'>('unmapped');
   const [inputSkus, setInputSkus] = useState<Record<string, string>>({});
   const [searchItem, setSearchItem] = useState('');
   const [mappingSearch, setMappingSearch] = useState('');
   const [physicalCounts, setPhysicalCounts] = useState<Record<string, PhysicalCountRow>>({});
 
-  // 1. ດຶງຂໍ້ມູນ Real-time ຈາກ Firestore
+  // 🌟 ຟັງຊັນຈັດກຸ່ມອັດຕະໂນມັດຈາກເລກ SKU
+  const classifySku = (skuStr: string): { groupName: string; isCogs: boolean; prefix: string } => {
+    const clean = String(skuStr || '').trim().toUpperCase();
+    if (!clean) return { groupName: 'ຍັງບໍ່ມີ SKU', isCogs: false, prefix: '' };
+
+    // ຮຽງຕາມຄວາມຍາວຂອງ Prefix ເພື່ອໃຫ້ກົງຈຸດທີ່ສຸດ (ເຊັ່ນ: EQ ມາກ່ອນ E)
+    const sorted = [...skuRules].sort((a, b) => b.prefix.length - a.prefix.length);
+    const matched = sorted.find(r => clean.startsWith(r.prefix.toUpperCase()));
+
+    if (matched) {
+      return { groupName: matched.name, isCogs: matched.isCogs, prefix: matched.prefix };
+    }
+    return { groupName: 'ອື່ນໆ (General)', isCogs: false, prefix: 'OTHER' };
+  };
+
+  // 1. ດຶງຂໍ້ມູນ Real-time + SKU Rules ຈາກ Firestore
   useEffect(() => {
     const unsubP = onSnapshot(collection(db, 'products'), snap => {
       const prods = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -126,8 +144,8 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         if (Object.keys(prev).length > 0) return prev;
         const initialMap: Record<string, boolean> = {};
         prods.forEach(p => {
-          const catName = String(p.category || '').toLowerCase();
-          initialMap[p.id] = !catName.includes('asset') && !catName.includes('operating') && !catName.includes('opex');
+          const info = classifySku(String(p.sku || ''));
+          initialMap[p.id] = info.isCogs;
         });
         return initialMap;
       });
@@ -148,9 +166,9 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       setSkuMappings(mapData);
     });
 
-    const unsubC = onSnapshot(doc(db, 'settings', 'cogs_categories'), snap => {
-      if (snap.exists() && Array.isArray(snap.data()?.categories)) {
-        setCustomCategories(snap.data().categories);
+    const unsubR = onSnapshot(doc(db, 'settings', 'cogs_sku_rules'), snap => {
+      if (snap.exists() && Array.isArray(snap.data()?.rules)) {
+        setSkuRules(snap.data().rules);
       }
     }, () => {});
 
@@ -159,7 +177,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       unsubS();
       unsubT();
       unsubM();
-      unsubC();
+      unsubR();
     };
   }, [currentBranch]);
 
@@ -188,48 +206,49 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const handlePrevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
   const handleNextMonth = () => setCurrentDate(prev => addMonths(prev, 1));
 
-  const handleAddCategory = async () => {
-    if (!newCatName.trim()) return;
-    const newCat: CustomCategory = {
-      id: `cat_${Date.now()}`,
-      name: newCatName.trim(),
-      isCogs: newCatIsCogs
+  // 3. ຈັດການກົດເກນ SKU (Prefix Rules)
+  const handleAddSkuRule = async () => {
+    const cleanPref = newPrefix.trim().toUpperCase();
+    const cleanName = newRuleName.trim();
+    if (!cleanPref || !cleanName) return;
+
+    const newRule: SkuPrefixRule = {
+      id: `rule_${Date.now()}`,
+      prefix: cleanPref,
+      name: cleanName,
+      isCogs: newRuleIsCogs
     };
-    const updated = [...customCategories, newCat];
-    setCustomCategories(updated);
-    try {
-      await setDoc(doc(db, 'settings', 'cogs_categories'), { categories: updated }, { merge: true });
-    } catch {}
-    setNewCatName('');
-  };
 
-  const handleDeleteCategory = async (catId: string) => {
-    const updated = customCategories.filter(c => c.id !== catId);
-    setCustomCategories(updated);
+    const updated = [...skuRules.filter(r => r.prefix !== cleanPref), newRule];
+    setSkuRules(updated);
     try {
-      await setDoc(doc(db, 'settings', 'cogs_categories'), { categories: updated }, { merge: true });
+      await setDoc(doc(db, 'settings', 'cogs_sku_rules'), { rules: updated }, { merge: true });
     } catch {}
-  };
 
-  const handleUpdateProductCategory = async (productId: string, newCategoryName: string) => {
-    try {
-      await updateDoc(doc(db, 'products', productId), {
-        category: newCategoryName
+    // ອັບເດດການຕິກ COGS ທັນທີ
+    setSelectedProductIds(prev => {
+      const next = { ...prev };
+      products.forEach(p => {
+        const info = classifySku(String(p.sku || ''));
+        next[p.id] = info.isCogs;
       });
-      const matchedCat = customCategories.find(c => c.name === newCategoryName);
-      if (matchedCat) {
-        setSelectedProductIds(prev => {
-          const next = { ...prev, [productId]: matchedCat.isCogs };
-          localStorage.setItem(`cogs_selected_items_${currentBranch}`, JSON.stringify(next));
-          return next;
-        });
-      }
-    } catch (err: any) {
-      alert('Error updating category: ' + err.message);
-    }
+      localStorage.setItem(`cogs_selected_items_${currentBranch}`, JSON.stringify(next));
+      return next;
+    });
+
+    setNewPrefix('');
+    setNewRuleName('');
   };
 
-  // 3. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier
+  const handleDeleteSkuRule = async (ruleId: string) => {
+    const updated = skuRules.filter(r => r.id !== ruleId);
+    setSkuRules(updated);
+    try {
+      await setDoc(doc(db, 'settings', 'cogs_sku_rules'), { rules: updated }, { merge: true });
+    } catch {}
+  };
+
+  // 4. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier + ຄຳແນະນຳຂ້າມຮ້ານ
   const distinctSupplierItems = useMemo(() => {
     const map: Record<string, {
       rawId: string;
@@ -270,7 +289,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
         if (!currentSku) {
           const deepNormRaw = normalizeLaoDeep(rawName);
-
           if (deepNormRaw && existingNameMap[deepNormRaw]) {
             suggestedSku = existingNameMap[deepNormRaw];
             suggestedSource = 'ເຄີຍຈັບຄູ່ຈາກຮ້ານອື່ນ';
@@ -313,7 +331,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     const targetSku = String(customSkuToSave !== undefined 
       ? customSkuToSave 
       : (inputSkus[supplierKey] !== undefined ? inputSkus[supplierKey] : (skuMappings[supplierKey.replace(/[\/\s]/g, '_')]?.targetSku || ''))
-    ).trim();
+    ).trim().toUpperCase();
 
     if (!targetSku) {
       alert('ກະລຸນາພິມເລກ SKU ກ່ອນກົດບັນທຶກ!');
@@ -323,21 +341,24 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     try {
       setMappingUpdatingId(supplierKey);
 
-      let targetProduct = products.find(p => String(p?.sku || '').toLowerCase() === targetSku.toLowerCase());
+      // ກຳນົດກຸ່ມອັດຕະໂນມັດຕາມ SKU
+      const autoGroup = classifySku(targetSku);
+
+      let targetProduct = products.find(p => String(p?.sku || '').toUpperCase() === targetSku);
       if (!targetProduct) {
         try {
           const newProdRef = await addDoc(collection(db, 'products'), {
             name: rawName || targetSku,
             sku: targetSku,
             unit: 'UNIT',
-            category: 'ວັດຖຸດິບ (Raw Material)',
+            category: autoGroup.groupName,
             cost: 0,
             isApproved: true,
             createdAt: serverTimestamp()
           });
-          targetProduct = { id: newProdRef.id, name: rawName, sku: targetSku, unit: 'UNIT' };
+          targetProduct = { id: newProdRef.id, name: rawName, sku: targetSku, unit: 'UNIT', category: autoGroup.groupName };
         } catch {
-          targetProduct = { id: rawId, name: rawName, sku: targetSku, unit: 'UNIT' };
+          targetProduct = { id: rawId, name: rawName, sku: targetSku, unit: 'UNIT', category: autoGroup.groupName };
         }
       }
 
@@ -353,6 +374,13 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         updatedAt: serverTimestamp()
       });
 
+      // ຕັ້ງຄ່າ COGS ອັດຕະໂນມັດຕາມ SKU
+      setSelectedProductIds(prev => {
+        const next = { ...prev, [targetProduct.id]: autoGroup.isCogs };
+        localStorage.setItem(`cogs_selected_items_${currentBranch}`, JSON.stringify(next));
+        return next;
+      });
+
       try {
         const matchingBills = supplierPrices.filter(sp => (sp.productId === rawId || sp.id === rawId) && sp.supplier === supplier);
         for (const bill of matchingBills) {
@@ -363,7 +391,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         }
       } catch {}
 
-      alert(`✅ ບັນທຶກ SKU "${targetSku}" ສຳເລັດ!`);
+      alert(`✅ ບັນທຶກ SKU "${targetSku}" ສຳເລັດ! ຈັດເຂົ້າກຸ່ມ "${autoGroup.groupName}"`);
     } catch (err: any) {
       alert('Error updating SKU: ' + err.message);
     } finally {
@@ -373,10 +401,11 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
   const handleApplyToAllSimilar = async (sourceRawName: string, targetSku: string) => {
     if (!targetSku) return;
+    const cleanSku = targetSku.trim().toUpperCase();
     const deepNormSource = normalizeLaoDeep(sourceRawName);
     if (!deepNormSource) return;
 
-    if (!window.confirm(`ຕ້ອງການນຳໃຊ້ SKU "${targetSku}" ໃຫ້ກັບທຸກຮ້ານທີ່ມີຄຳວ່າ "${sourceRawName}" ແທ້ບໍ່?`)) {
+    if (!window.confirm(`ຕ້ອງການນຳໃຊ້ SKU "${cleanSku}" ໃຫ້ກັບທຸກຮ້ານທີ່ມີຄຳວ່າ "${sourceRawName}" ແທ້ບໍ່?`)) {
       return;
     }
 
@@ -396,12 +425,12 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
           rawId: item.rawId,
           rawName: item.rawName,
           supplier: item.supplier,
-          targetSku,
+          targetSku: cleanSku,
           updatedAt: serverTimestamp()
         });
       }
 
-      alert(`🎉 ສຳເລັດ! ໄດ້ນຳໃຊ້ SKU "${targetSku}" ໃຫ້ກັບ ${similarItems.length} ລາຍການຮຽບຮ້ອຍ!`);
+      alert(`🎉 ສຳເລັດ! ໄດ້ນຳໃຊ້ SKU "${cleanSku}" ໃຫ້ກັບ ${similarItems.length} ລາຍການຮຽບຮ້ອຍ!`);
     } catch (err: any) {
       alert('Error: ' + err.message);
     } finally {
@@ -433,7 +462,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
             rawId: item.rawId,
             rawName: item.rawName,
             supplier: item.supplier,
-            targetSku: matchedProd.sku,
+            targetSku: String(matchedProd.sku).toUpperCase(),
             productId: matchedProd.id,
             productName: matchedProd.name,
             updatedAt: serverTimestamp()
@@ -451,7 +480,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }
   };
 
-  // 4. ຄິດໄລ່ WAC & Actual COGS (Safe Calculation)
+  // 5. ຄິດໄລ່ WAC & Actual COGS
   const calculationResults = useMemo(() => {
     const monthStart = `${selectedMonth}-01`;
     const monthEnd = `${selectedMonth}-31`;
@@ -476,7 +505,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }> = {};
 
     (products || []).forEach(p => {
-      const skuKey = String(p?.sku || p?.id || '').trim();
+      const skuKey = String(p?.sku || p?.id || '').trim().toUpperCase();
       skuLedger[skuKey] = {
         product: p,
         totalPurchasedQty: 0,
@@ -496,7 +525,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         skuMappings[rawKey]?.targetSku || 
         products.find(p => p.id === sp.productId)?.sku || 
         ''
-      ).trim();
+      ).trim().toUpperCase();
 
       if (!resolvedSku || !skuLedger[resolvedSku]) return;
 
@@ -529,8 +558,13 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     let totalSelectedItemsCount = 0;
 
     const roster = (products || []).map(p => {
-      const isSelected = selectedProductIds[p.id] !== false;
-      const skuKey = String(p?.sku || p?.id || '').trim();
+      const skuStr = String(p?.sku || '').trim().toUpperCase();
+      const skuInfo = classifySku(skuStr);
+
+      // 🌟 ຕັດສິນໃຈວ່າລາຍການນີ້ຖືກຕິກ COGS ບໍ່ (ອີງຕາມກົດເກນ SKU ຫຼື Checkbox)
+      const isSelected = selectedProductIds[p.id] !== undefined ? selectedProductIds[p.id] : skuInfo.isCogs;
+
+      const skuKey = skuStr || String(p?.id || '').trim();
       const ledger = skuLedger[skuKey];
       const count = physicalCounts[p.id] || { fullUnits: 0, partialPercent: 0 };
       
@@ -549,9 +583,10 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
       return {
         id: p.id,
-        sku: p.sku || '-',
+        sku: skuStr || '-',
+        prefix: skuInfo.prefix,
+        groupName: skuInfo.groupName,
         name: p.name || 'Unnamed',
-        category: p.category || 'ວັດຖຸດິບ (Raw Material)',
         unit: p.unit || 'UNIT',
         fullUnits,
         partialPercent,
@@ -562,6 +597,9 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         isSelected
       };
     });
+
+    // ຈັດລຽງໃຫ້ SKU ຮຽງຕາມກຸ່ມຢ່າງສວຍງາມ (P ມາກ່ອນ, ຕາມດ້ວຍ S, O...)
+    roster.sort((a, b) => a.sku.localeCompare(b.sku));
 
     const actualCogs = Math.max(0, totalPurchasesThisMonth - totalEndingInventoryValue);
     const grossProfit = monthRevenue - actualCogs;
@@ -579,7 +617,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       roster,
       totalSelectedItemsCount
     };
-  }, [products, supplierPrices, transactions, selectedMonth, physicalCounts, skuMappings, selectedProductIds]);
+  }, [products, supplierPrices, transactions, selectedMonth, physicalCounts, skuMappings, selectedProductIds, skuRules]);
 
   const handleCountChange = (productId: string, field: 'fullUnits' | 'partialPercent', value: string) => {
     const num = parseFloat(value) || 0;
@@ -618,12 +656,12 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   };
 
   const handleExportExcel = () => {
-    const headers = ['Active COGS', 'SKU', 'Product', 'Category', 'Unit', 'Full Units', 'Partial %', 'Total Remaining', 'WAC (LAK)', 'Ending Value (LAK)'];
+    const headers = ['Active COGS', 'SKU', 'Product', 'Group (SKU Rule)', 'Unit', 'Full Units', 'Partial %', 'Total Remaining', 'WAC (LAK)', 'Ending Value (LAK)'];
     const rows = calculationResults.roster.map(r => [
       r.isSelected ? 'YES' : 'NO',
       r.sku,
       r.name,
-      r.category,
+      r.groupName,
       r.unit,
       r.fullUnits,
       `${r.partialPercent}%`,
@@ -648,7 +686,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
           </div>
           <div>
             <h2 className="text-sm font-black uppercase tracking-wider text-slate-900 dark:text-white">
-              {i18n.language === 'la' ? 'ສະຫຼຸບຕົ້ນທຶນ COGS & ຈັບຄູ່ SKU' : 'COGS Intelligence & SKU Hub'}
+              {i18n.language === 'la' ? 'ສະຫຼຸບຕົ້ນທຶນ COGS & ຈັດກຸ່ມຕາມ SKU' : 'COGS Intelligence & SKU Architecture'}
             </h2>
             
             {/* ປະຕິທິນ 2 ພາສາ */}
@@ -679,14 +717,14 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
           </div>
         </div>
 
-        {/* ປຸ່ມສະຫຼັບແທັບ + ປຸ່ມຈັດການກຸ່ມ */}
+        {/* ປຸ່ມສະຫຼັບແທັບ + ປຸ່ມຕັ້ງຄ່າກົດເກນ SKU */}
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => setShowCategoryModal(true)}
+            onClick={() => setShowRuleModal(true)}
             className="px-3.5 py-2 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 text-slate-700 dark:text-white text-xs font-black uppercase rounded-xl flex items-center gap-1.5 cursor-pointer"
           >
-            <Tags className="w-3.5 h-3.5 text-indigo-500" />
-            <span>ຈັດການກຸ່ມສິນຄ້າ</span>
+            <Settings className="w-3.5 h-3.5 text-indigo-500" />
+            <span>ກຳນົດກົດເກນ SKU ({skuRules.length})</span>
           </button>
 
           <div className="flex bg-slate-100 dark:bg-black/25 p-1 rounded-2xl">
@@ -769,7 +807,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
             </div>
           </div>
 
-          {/* ຕາຕະລາງກວດນັບສະຕັອກ */}
+          {/* ຕາຕະລາງກວດນັບສະຕັອກ + Filter ຕາມໝວດ SKU */}
           <div className="bg-white dark:bg-[#073069] rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl overflow-hidden">
             <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-white/10 space-y-3">
               <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
@@ -802,11 +840,11 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                 </div>
               </div>
 
-              {/* ປຸ່ມຄວບຄຸມການຕິກເລືອກ + Filter ຕາມກຸ່ມ */}
+              {/* 🌟 Filter ຕາມ Prefix ຂອງ SKU (ເຊັ່ນ: ໝວດ P, ໝວດ S, ໝວດ O...) */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-white/5">
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
-                    ຄິດໄລ່ COGS: <strong className="text-indigo-600 dark:text-indigo-400">{calculationResults.totalSelectedItemsCount}</strong> / {products.length} ລາຍການ
+                    ນັບເຂົ້າ COGS: <strong className="text-indigo-600 dark:text-indigo-400">{calculationResults.totalSelectedItemsCount}</strong> / {products.length} ລາຍການ
                   </span>
                   <div className="h-3 w-[1px] bg-slate-200 dark:bg-white/10"></div>
                   <button
@@ -819,7 +857,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                     }}
                     className="text-[10px] font-black uppercase text-indigo-500 hover:text-indigo-600 cursor-pointer"
                   >
-                    [ຕິກເລືອກທັງໝົດ]
+                    [ຕິກທັງໝົດ]
                   </button>
                   <button
                     type="button"
@@ -835,30 +873,30 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                   </button>
                 </div>
 
-                {/* Filter ຕາມໝວດໝູ່ທີ່ສ້າງໄວ້ */}
+                {/* ປຸ່ມກັ່ນຕອງໝວດ SKU */}
                 <div className="flex items-center gap-1 overflow-x-auto">
                   <Filter className="w-3 h-3 text-slate-400 mr-1" />
                   <button
-                    onClick={() => setCategoryFilter('all')}
+                    onClick={() => setSkuPrefixFilter('all')}
                     className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase cursor-pointer transition-all ${
-                      categoryFilter === 'all' 
+                      skuPrefixFilter === 'all' 
                         ? 'bg-indigo-600 text-white' 
                         : 'bg-slate-100 dark:bg-white/5 text-slate-500 hover:text-slate-800'
                     }`}
                   >
                     ທັງໝົດ
                   </button>
-                  {customCategories.map(cat => (
+                  {skuRules.map(rule => (
                     <button
-                      key={cat.id}
-                      onClick={() => setCategoryFilter(cat.name)}
+                      key={rule.id}
+                      onClick={() => setSkuPrefixFilter(rule.prefix)}
                       className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase cursor-pointer transition-all ${
-                        categoryFilter === cat.name 
+                        skuPrefixFilter === rule.prefix 
                           ? 'bg-indigo-600 text-white' 
                           : 'bg-slate-100 dark:bg-white/5 text-slate-500 hover:text-slate-800'
                       }`}
                     >
-                      {cat.name}
+                      ໝວດ [{rule.prefix}] {rule.name.split(' ')[0]}
                     </button>
                   ))}
                 </div>
@@ -871,7 +909,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                   <tr>
                     <th className="p-3.5 text-center w-12">COGS</th>
                     <th className="p-3.5">SKU / ລາຍການສິນຄ້າ</th>
-                    <th className="p-3.5 w-48">ກຸ່ມສິນຄ້າ (Category)</th>
+                    <th className="p-3.5 w-44">ກຸ່ມຕາມ SKU (Auto-Group)</th>
                     <th className="p-3.5 text-right">ລາຄາ WAC ຕໍ່ໜ່ວຍ</th>
                     <th className="p-3.5 text-center w-36">ຈຳນວນເຕັມ (Full Units)</th>
                     <th className="p-3.5 text-center w-32">ເຫຼືອເປັນ % (0-100%)</th>
@@ -884,9 +922,8 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                     .filter(r => {
                       const matchSearch = String(r.name || '').toLowerCase().includes(searchItem.toLowerCase()) || 
                                           String(r.sku || '').toLowerCase().includes(searchItem.toLowerCase());
-                      const matchCat = categoryFilter === 'all' || 
-                                       String(r.category || '').toLowerCase() === String(categoryFilter || '').toLowerCase();
-                      return matchSearch && matchCat;
+                      const matchPrefix = skuPrefixFilter === 'all' || r.prefix === skuPrefixFilter;
+                      return matchSearch && matchPrefix;
                     })
                     .map(item => (
                       <tr 
@@ -927,18 +964,15 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                           )}
                         </td>
 
+                        {/* 🌟 ສະແດງກຸ່ມທີ່ລະບົບອ່ານອອກມາຈາກ SKU ອັດຕະໂນມັດ */}
                         <td className="p-3.5">
-                          <select
-                            value={item.category}
-                            onChange={e => handleUpdateProductCategory(item.id, e.target.value)}
-                            className="h-7 px-2 text-[10px] font-bold rounded-lg bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 outline-none cursor-pointer w-full"
-                          >
-                            {customCategories.map(cat => (
-                              <option key={cat.id} value={cat.name}>
-                                {cat.name} {cat.isCogs ? '(COGS)' : '(Non-COGS)'}
-                              </option>
-                            ))}
-                          </select>
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase inline-flex items-center gap-1 ${
+                            item.prefix === 'P' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
+                            item.prefix === 'S' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' :
+                            'bg-slate-100 dark:bg-white/10 text-slate-500'
+                          }`}>
+                            <span className="font-mono font-black">[{item.prefix || '?'}]</span> {item.groupName}
+                          </span>
                         </td>
                         
                         <td className="p-3.5 text-right font-mono font-bold text-slate-600 dark:text-slate-300">
@@ -992,7 +1026,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       )}
 
       {/* ======================================================== */}
-      {/* ແທັບທີ 2: ສູນປ້ອນ / ຈັບຄູ່ SKU ດ້ວຍຕົນເອງ */}
+      {/* ແທັບທີ 2: ສູນປ້ອນ / ຈັບຄູ່ SKU */}
       {/* ======================================================== */}
       {activeTab === 'sku_mapping' && (
         <div className="bg-white dark:bg-[#073069] rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl overflow-hidden space-y-4">
@@ -1004,11 +1038,11 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                   <span>ສູນຈັບຄູ່ SKU ອັດສະລິຍະ (Smart SKU Matching Hub)</span>
                 </h3>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-black uppercase">
-                  🇱🇦 Lao Deep Stripper Active
+                  🇱🇦 Auto-Group by Prefix
                 </span>
               </div>
               <p className="text-[10.5px] text-slate-400 mt-0.5">
-                ຈັບຄູ່ສິນຄ້າຂ້າມຮ້ານອັດຕະໂນມັດ (ເຊັ່ນ: ຝາໂດມ 95mm = ຝາໂດມປາກ95 = ຝາໂດມ).
+                ໃສ່ເລກ SKU ເຊັ່ນ <strong>P001</strong> (ວັດຖຸດິບ), <strong>S001</strong> (Packaging), <strong>O001</strong> (ສິ້ນເປືອງ). ລະບົບຈະຈັດກຸ່ມໃຫ້ທັນທີ!
               </p>
             </div>
 
@@ -1058,8 +1092,8 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                   <th className="p-3.5">Supplier</th>
                   <th className="p-3.5">ລາຍການສິນຄ້າໃນບິນຈັດຊື້</th>
                   <th className="p-3.5 text-center">ຈຳນວນບິນ</th>
-                  <th className="p-3.5 w-80">ພິມເລກ SKU / ຕົວຊ່ວຍ</th>
-                  <th className="p-3.5 text-center">ສະຖານະ</th>
+                  <th className="p-3.5 w-80">ພິມເລກ SKU (ເຊັ່ນ P001, S001)</th>
+                  <th className="p-3.5 text-center">ສະຖານະ & ກຸ່ມ</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-white/5">
@@ -1074,6 +1108,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                     const supplierKey = `${item.supplier}_${item.rawId}`;
                     const currentVal = inputSkus[supplierKey] !== undefined ? inputSkus[supplierKey] : (item.currentSku || '');
                     const isLinked = !!item.currentSku;
+                    const autoInfo = classifySku(currentVal || item.currentSku || '');
 
                     return (
                       <tr key={supplierKey} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-all">
@@ -1095,7 +1130,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                                 onClick={() => handleSaveSkuMapping(supplierKey, item.rawId, item.supplier, item.rawName, item.suggestedSku)}
                                 className="px-2 py-0.5 bg-amber-500 text-white rounded text-[9px] font-black uppercase cursor-pointer shadow-xs hover:bg-amber-600"
                               >
-                                [ໃຊ້ເລກນີ້ທັນທີ]
+                                [ໃຊ້ເລກນີ້]
                               </button>
                             </div>
                           )}
@@ -1113,16 +1148,16 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                               <input
                                 type="text"
                                 value={currentVal}
-                                placeholder="ຕົວຢ່າງ: LID-DOME-95"
-                                onChange={(e) => setInputSkus(prev => ({ ...prev, [supplierKey]: e.target.value }))}
-                                className="h-8 px-2.5 rounded-lg bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono font-bold outline-none focus:border-indigo-500 w-full"
+                                placeholder="ຕົວຢ່າງ: P001, S001"
+                                onChange={(e) => setInputSkus(prev => ({ ...prev, [supplierKey]: e.target.value.toUpperCase() }))}
+                                className="h-8 px-2.5 rounded-lg bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono font-bold outline-none focus:border-indigo-500 w-full uppercase"
                               />
                               <button
                                 type="button"
                                 disabled={mappingUpdatingId === supplierKey}
                                 onClick={() => handleSaveSkuMapping(supplierKey, item.rawId, item.supplier, item.rawName)}
                                 className="h-8 px-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-50"
-                                title="ບັນທຶກສະເພາະຮ້ານນີ້"
+                                title="ບັນທຶກ"
                               >
                                 <Save className="w-3 h-3" />
                                 <span>{mappingUpdatingId === supplierKey ? '...' : 'ບັນທຶກ'}</span>
@@ -1144,9 +1179,14 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
                         <td className="p-3.5 text-center">
                           {isLinked ? (
-                            <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[9.5px] font-mono inline-flex items-center gap-1">
-                              <Check className="w-3 h-3" /> {item.currentSku}
-                            </span>
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[9.5px] font-mono inline-flex items-center gap-1">
+                                <Check className="w-3 h-3" /> {item.currentSku}
+                              </span>
+                              <span className="text-[8.5px] text-slate-400 font-bold uppercase">
+                                {autoInfo.groupName}
+                              </span>
+                            </div>
                           ) : (
                             <span className="px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-[9.5px] uppercase inline-flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3" /> ຍັງບໍ່ມີ SKU
@@ -1162,19 +1202,21 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         </div>
       )}
 
-      {/* MODAL ຈັດການກຸ່ມສິນຄ້າ */}
-      {showCategoryModal && (
+      {/* ======================================================== */}
+      {/* 🌟 MODAL ກຳນົດກົດເກນ SKU (SKU PREFIX RULE MANAGER) */}
+      {/* ======================================================== */}
+      {showRuleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-white dark:bg-[#073069] w-full max-w-lg rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-5">
             <div className="flex justify-between items-center border-b border-slate-100 dark:border-white/10 pb-3">
               <div className="flex items-center gap-2">
-                <Tags className="w-5 h-5 text-indigo-500" />
+                <Settings className="w-5 h-5 text-indigo-500" />
                 <h3 className="text-sm font-black uppercase text-slate-800 dark:text-white">
-                  ຈັດການກຸ່ມສິນຄ້າ (COGS Category Manager)
+                  ກຳນົດກົດເກນ Prefix ຂອງ SKU (SKU Architecture)
                 </h3>
               </div>
               <button 
-                onClick={() => setShowCategoryModal(false)}
+                onClick={() => setShowRuleModal(false)}
                 className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 text-slate-400 cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -1182,54 +1224,70 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
             </div>
 
             <p className="text-xs text-slate-500 dark:text-slate-300">
-              ກຸ່ມທີ່ຖືກຕັ້ງຄ່າວ່າ <strong>Active COGS (Yes)</strong> ຈະຖືກດຶງມານັບເຂົ້າໃນຍອດຕົ້ນທຶນຕົວຈິງທຸກໆເດືອນອັດຕະໂນມັດ:
+              ລະບົບຈະອ່ານຕົວອັກສອນທຳອິດຂອງ SKU ແລ້ວຈັດກຸ່ມ + ນັບເຂົ້າ COGS ໃຫ້ອັດຕະໂນມັດ ໂດຍບໍ່ຕ້ອງມານັ່ງເລືອກກຸ່ມເອງ:
             </p>
 
+            {/* ຟອມເພີ່ມ Prefix ໃໝ່ */}
             <div className="p-3.5 bg-slate-50 dark:bg-white/5 rounded-2xl space-y-2.5 border border-slate-200 dark:border-white/10">
-              <span className="text-[10px] font-black uppercase text-slate-400">ສ້າງກຸ່ມໃໝ່</span>
-              <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black uppercase text-slate-400">ເພີ່ມກົດເກນ SKU ໃໝ່</span>
+              <div className="grid grid-cols-12 gap-2">
                 <input
                   type="text"
-                  placeholder="ຊື່ກຸ່ມ (ເຊັ່ນ: ວັດຖຸດິບ, Packaging, ສິ້ນເປືອງ...)"
-                  value={newCatName}
-                  onChange={e => setNewCatName(e.target.value)}
-                  className="flex-1 h-9 px-3 rounded-xl bg-white dark:bg-[#052659] border border-slate-200 dark:border-white/10 text-xs font-bold outline-none"
+                  placeholder="Prefix (ເຊັ່ນ P, S, O)"
+                  value={newPrefix}
+                  onChange={e => setNewPrefix(e.target.value.toUpperCase())}
+                  className="col-span-3 h-9 px-2.5 rounded-xl bg-white dark:bg-[#052659] border border-slate-200 dark:border-white/10 text-xs font-mono font-bold uppercase outline-none"
                 />
-                <label className="flex items-center gap-1.5 text-xs font-bold cursor-pointer text-slate-700 dark:text-white">
-                  <input
-                    type="checkbox"
-                    checked={newCatIsCogs}
-                    onChange={e => setNewCatIsCogs(e.target.checked)}
-                    className="w-4 h-4 text-indigo-600 rounded"
-                  />
-                  <span>ນັບເຂົ້າ COGS</span>
-                </label>
-                <button
-                  onClick={handleAddCategory}
-                  className="px-3.5 h-9 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase rounded-xl flex items-center gap-1 cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" /> ເພີ່ມ
-                </button>
+                <input
+                  type="text"
+                  placeholder="ຊື່ກຸ່ມ (ເຊັ່ນ: ວັດຖຸດິບ, Packaging...)"
+                  value={newRuleName}
+                  onChange={e => setNewRuleName(e.target.value)}
+                  className="col-span-5 h-9 px-3 rounded-xl bg-white dark:bg-[#052659] border border-slate-200 dark:border-white/10 text-xs font-bold outline-none"
+                />
+                <div className="col-span-4 flex items-center justify-between gap-1">
+                  <label className="flex items-center gap-1 text-[11px] font-bold cursor-pointer text-slate-700 dark:text-white">
+                    <input
+                      type="checkbox"
+                      checked={newRuleIsCogs}
+                      onChange={e => setNewRuleIsCogs(e.target.checked)}
+                      className="w-4 h-4 text-indigo-600 rounded"
+                    />
+                    <span>COGS</span>
+                  </label>
+                  <button
+                    onClick={handleAddSkuRule}
+                    className="px-3 h-9 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase rounded-xl cursor-pointer"
+                  >
+                    + ເພີ່ມ
+                  </button>
+                </div>
               </div>
             </div>
 
+            {/* ລາຍການກົດເກນ SKU ທີ່ມີໃນປັດຈຸບັນ */}
             <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
-              {customCategories.map(cat => (
+              {skuRules.map(rule => (
                 <div 
-                  key={cat.id}
+                  key={rule.id}
                   className="p-3 bg-slate-50 dark:bg-white/5 rounded-2xl flex justify-between items-center border border-slate-100 dark:border-white/5"
                 >
-                  <div>
-                    <p className="text-xs font-bold text-slate-800 dark:text-white">{cat.name}</p>
-                    <span className={`text-[9.5px] font-black uppercase ${cat.isCogs ? 'text-emerald-500' : 'text-slate-400'}`}>
-                      {cat.isCogs ? '✓ ນັບເຂົ້າ COGS (Active in COGS)' : '✗ ບໍ່ນັບເຂົ້າ COGS (Non-COGS)'}
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-10 h-8 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-mono font-black text-xs flex items-center justify-center">
+                      [{rule.prefix}]
                     </span>
+                    <div>
+                      <p className="text-xs font-bold text-slate-800 dark:text-white">{rule.name}</p>
+                      <span className={`text-[9.5px] font-black uppercase ${rule.isCogs ? 'text-emerald-500' : 'text-slate-400'}`}>
+                        {rule.isCogs ? '✓ ນັບເຂົ້າ COGS (Active in COGS)' : '✗ ບໍ່ນັບເຂົ້າ COGS (Non-COGS)'}
+                      </span>
+                    </div>
                   </div>
-                  {customCategories.length > 1 && (
+                  {skuRules.length > 1 && (
                     <button
-                      onClick={() => handleDeleteCategory(cat.id)}
+                      onClick={() => handleDeleteSkuRule(rule.id)}
                       className="p-1.5 text-red-400 hover:text-red-500 rounded-lg cursor-pointer"
-                      title="ລຶບກຸ່ມນີ້"
+                      title="ລຶບກົດເກນນີ້"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -1240,7 +1298,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
             <div className="pt-2 border-t border-slate-100 dark:border-white/10">
               <button
-                onClick={() => setShowCategoryModal(false)}
+                onClick={() => setShowRuleModal(false)}
                 className="w-full h-10 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 text-slate-800 dark:text-white text-xs font-black uppercase rounded-xl cursor-pointer"
               >
                 ປິດໜ້າຕ່າງ
