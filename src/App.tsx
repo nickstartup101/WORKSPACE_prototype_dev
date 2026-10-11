@@ -17,7 +17,8 @@ import {
   PieChart,
   Receipt,
   Sparkles,
-  Scale // 👈 ເພີ່ມໄອຄອນຕາຊັ່ງສຳລັບ COGS
+  Scale,
+  PiggyBank // 👈 ເພີ່ມໄອຄອນກະປຸກອອມສິນ
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
@@ -34,9 +35,9 @@ import PinModal from './components/PinModal';
 import ProcurementPlanner from './components/ProcurementPlanner';
 import FinanceReport from './components/FinanceReport';
 import DebtLedger from './components/DebtLedger';
-import CogsIntelligence from './components/CogsIntelligence'; // 👈 ເຊື່ອມໂຍງໂມດູນ COGS
+import CogsIntelligence from './components/CogsIntelligence';
+import DividendSettlement from './components/DividendSettlement'; // 👈 Import ໂມດູນປັນຜົນ
 
-// Premium Text Logo Component
 const TextLogo = ({ centered = false, dark = false, name = "La Dolce" }: { centered?: boolean, dark?: boolean, name?: string | null }) => (
   <div className={`flex flex-col ${centered ? 'items-center text-center' : 'items-start text-left'} gap-2 group`}>
     <h1 className={`text-5xl font-alice tracking-tight leading-none ${dark ? 'text-white' : 'text-[#052659] dark:text-white'}`}>
@@ -99,28 +100,6 @@ export default function App() {
   const [selectedBranch, setSelectedBranch] = useState<'branch_1' | 'branch_2'>(() => {
     return (localStorage.getItem('selected_branch') as any) || 'branch_1';
   });
-
-  const [, setScannedBillData] = useState<any>(null);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const verifyBillParam = params.get('verifyBill');
-    if (verifyBillParam) {
-      try {
-        const decoded = decodeURIComponent(escape(atob(verifyBillParam)));
-        const parsed = JSON.parse(decoded);
-        setScannedBillData(parsed);
-      } catch (e) {
-        try {
-          const decoded = atob(verifyBillParam);
-          const parsed = JSON.parse(decoded);
-          setScannedBillData(parsed);
-        } catch (err) {
-          console.error("Base64 decode failed", err);
-        }
-      }
-    }
-  }, []);
 
   const FOUNDING_ADMINS = ['sisavanhbouddasien@gmail.com', 'tonickbouddasien@gmail.com'];
   const isSuperAdmin = adminData?.role === 'super_admin' || (user?.email && FOUNDING_ADMINS.includes(user.email.toLowerCase()));
@@ -276,13 +255,14 @@ export default function App() {
     );
   }
 
-  // ✅ 🧭 ລາຍການເມນູທັງໝົດໃນລະບົບ (ລວມທັງ COGS ໃໝ່):
+  // ✅ ລາຍການເມນູ Sidebar (ລວມທັງ Dividends):
   const navItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: t('dashboard') },
     { id: 'report', icon: PieChart, label: i18n.language === 'la' ? 'ບົດລາຍງານການເງິນ' : 'Finance Report' },
+    { id: 'dividends', icon: PiggyBank, label: i18n.language === 'la' ? 'ປັນຜົນ & ເງິນ Stock' : 'Dividends & Stock Fund' }, // 👈 ເມນູໃໝ່
     { id: 'debts', icon: Receipt, label: i18n.language === 'la' ? 'ໜີ້ຕ້ອງສົ່ງ & ຮັບ (AP/AR)' : 'Debt Ledger' },
     { id: 'suppliers', icon: Truck, label: t('suppliers') },
-    { id: 'cogs', icon: Scale, label: i18n.language === 'la' ? 'ຕົ້ນທຶນ COGS & ສະຕັອກ' : 'COGS & Stock' }, // 👈 ເພີ່ມເມນູ COGS ຢູ່ນີ້!
+    { id: 'cogs', icon: Scale, label: i18n.language === 'la' ? 'ຕົ້ນທຶນ COGS & ສະຕັອກ' : 'COGS & Stock' },
     { id: 'planner', icon: Sparkles, label: i18n.language === 'la' ? 'ແຜນຈັດຊື້ & ບິນ' : 'Auto-Bill Planner' },
     { id: 'financials', icon: Wallet, label: t('financials'), isSensitive: true },
     { id: 'settings', icon: SettingsIcon, label: t('settings') },
@@ -472,9 +452,10 @@ export default function App() {
            <div className="max-w-7xl mx-auto space-y-6">
              {activeTab === 'dashboard' && <Dashboard userSettings={userSettings} user={user} selectedBranch={selectedBranch} />}
              {activeTab === 'report' && <FinanceReport selectedBranch={selectedBranch} />}
+             {activeTab === 'dividends' && <DividendSettlement selectedBranch={selectedBranch} />} {/* 👈 ແທັບປັນຜົນໃໝ່ */}
              {activeTab === 'debts' && <DebtLedger selectedBranch={selectedBranch} />}
              {activeTab === 'suppliers' && <Suppliers />}
-             {activeTab === 'cogs' && <CogsIntelligence selectedBranch={selectedBranch} userSettings={userSettings} />} {/* 👈 ສະແດງໜ້າ COGS ຢູ່ນີ້ */}
+             {activeTab === 'cogs' && <CogsIntelligence selectedBranch={selectedBranch} userSettings={userSettings} />}
              {activeTab === 'planner' && <ProcurementPlanner selectedBranch={selectedBranch} />}
              {activeTab === 'financials' && <Financials appConfig={appConfig} selectedBranch={selectedBranch} />}
              {activeTab === 'settings' && <Settings user={user} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} userSettings={userSettings} isSuperAdmin={isSuperAdmin} appConfig={appConfig} selectedBranch={selectedBranch} />}
