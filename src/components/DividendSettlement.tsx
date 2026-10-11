@@ -6,16 +6,17 @@ import {
 } from 'firebase/firestore';
 import { 
   PiggyBank, ArrowUpRight, ArrowDownRight, 
-  Calendar, Search, History, ArrowRightLeft, X, CheckCircle2
+  Calendar, Search, History, ArrowRightLeft, X, CheckCircle2,
+  FileText, Link2, CheckSquare, Square, AlertCircle, Edit3
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { useTranslation } from 'react-i18next';
 
 const QUARTERS = [
-  { id: 'Q1', name: 'ໄຕຣມາດ 1 (Q1: ເດືອນ 1, 2, 3)', months: ['01', '02', '03'] },
-  { id: 'Q2', name: 'ໄຕຣມາດ 2 (Q2: ເດືອນ 4, 5, 6)', months: ['04', '05', '06'] },
-  { id: 'Q3', name: 'ໄຕຣມາດ 3 (Q3: ເດືອນ 7, 8, 9)', months: ['07', '08', '09'] },
-  { id: 'Q4', name: 'ໄຕຣມາດ 4 (Q4: ເດືອນ 10, 11, 12)', months: ['10', '11', '12'] }
+  { id: 'Q1', name: 'ໄຕຣມາດ 1 (Q1)', defaultStart: '-01-01', defaultEnd: '-03-31' },
+  { id: 'Q2', name: 'ໄຕຣມາດ 2 (Q2)', defaultStart: '-04-01', defaultEnd: '-06-30' },
+  { id: 'Q3', name: 'ໄຕຣມາດ 3 (Q3)', defaultStart: '-07-01', defaultEnd: '-09-30' },
+  { id: 'Q4', name: 'ໄຕຣມາດ 4 (Q4)', defaultStart: '-10-01', defaultEnd: '-12-31' }
 ];
 
 export default function DividendSettlement({ selectedBranch }: { selectedBranch?: string }) {
@@ -24,14 +25,19 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
 
   const [transactions, setTransactions] = useState<any[]>([]);
   const [settlements, setSettlements] = useState<any[]>([]);
-  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
-  const [selectedQuarter, setSelectedQuarter] = useState<string>('Q3');
+  const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [selectedQuarter, setSelectedQuarter] = useState<string>('Q2');
 
-  // Modal ຍ້າຍລາຍຈ່າຍເກົ່າ
-  const [showMigrateModal, setShowMigrateModal] = useState(false);
-  const [migrateSearch, setMigrateSearch] = useState('');
-  const [targetMigrateQuarter, setTargetMigrateQuarter] = useState('Q3');
-  const [targetMigrateYear, setTargetMigrateYear] = useState(new Date().getFullYear());
+  // 🌟 ກຳນົດຊ່ວງວັນທີຂອງ Q ນັ້ນໄດ້ເອງ (Custom Period)
+  const [customStartDate, setCustomStartDate] = useState<string>('2026-04-01');
+  const [customEndDate, setCustomEndDate] = useState<string>('2026-06-30');
+
+  // Modal ດຶງລາຍການເກົ່າຜູກເຂົ້າ Q
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [selectedTxIdsToLink, setSelectedTxIdsToLink] = useState<string[]>([]);
+  const [linkSearch, setLinkSearch] = useState('');
+  const [targetLinkQuarter, setTargetLinkQuarter] = useState('Q2');
+  const [targetLinkYear, setTargetLinkYear] = useState(2026);
 
   // Form Settle
   const [transferToStockAmount, setTransferToStockAmount] = useState<string>('');
@@ -39,6 +45,15 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
   const [payoutMethod, setPayoutMethod] = useState<'Cash' | 'OnePay' | 'LDB'>('OnePay');
   const [settleRemark, setSettleRemark] = useState<string>('');
   const [saving, setSaving] = useState(false);
+
+  // ເວລາປ່ຽນ Q ຫຼື ປີ ໃຫ້ຕັ້ງຊ່ວງວັນທີເລີ່ມຕົ້ນໃຫ້ອັດຕະໂນມັດ (ແຕ່ຍັງແກ້ໄຂເອງໄດ້)
+  useEffect(() => {
+    const qObj = QUARTERS.find(q => q.id === selectedQuarter);
+    if (qObj) {
+      setCustomStartDate(`${selectedYear}${qObj.defaultStart}`);
+      setCustomEndDate(`${selectedYear}${qObj.defaultEnd}`);
+    }
+  }, [selectedQuarter, selectedYear]);
 
   // 1. ດຶງຂໍ້ມູນ Real-time
   useEffect(() => {
@@ -58,7 +73,7 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
     };
   }, [currentBranch]);
 
-  // 2. ຄິດໄລ່ຍອດເງິນ Stock & ກຳໄລສະສົມ
+  // 2. ຄິດໄລ່ຍອດເງິນ Stock & ກຳໄລຕາມຊ່ວງວັນທີທີ່ກຳນົດເອງ
   const financialMetrics = useMemo(() => {
     let totalStockTransferred = 0;
     let totalDividendsPaid = 0;
@@ -71,47 +86,44 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
       if (type === 'reserve_transfer' || cat === 'stock_reserve' || cat.includes('ເງິນແຮ') || cat.includes('stock')) {
         totalStockTransferred += amt;
       }
-      if (type === 'dividend' || cat === 'dividend' || cat.includes('ປັນຜົນ')) {
+      if (type === 'dividend' || cat === 'dividend' || cat === 'dividends' || cat.includes('ປັນຜົນ')) {
         totalDividendsPaid += amt;
       }
     });
 
-    // 🌟 ເງິນແຮ່ໝູນວຽນ (ເງິນ Stock) ຄົງເຫຼືອຕົວຈິງ
     const currentStockFundBalance = Math.max(0, totalStockTransferred - totalDividendsPaid);
 
-    const quarterDef = QUARTERS.find(q => q.id === selectedQuarter);
-    const quarterMonths = quarterDef?.months.map(m => `${selectedYear}-${m}`) || [];
-
-    let quarterRevenue = 0;
-    let quarterExpense = 0;
+    // 🌟 ຄິດໄລ່ກຳໄລສະສົມຕາມຊ່ວງວັນທີ Custom Start Date ➔ End Date
+    let periodRevenue = 0;
+    let periodExpense = 0;
 
     transactions.forEach(tx => {
-      const txDate = String(tx.date || '').slice(0, 7);
-      if (quarterMonths.includes(txDate)) {
+      const txDate = String(tx.date || '');
+      if (txDate >= customStartDate && txDate <= customEndDate) {
         const amt = Number(tx.amount || 0);
         const type = String(tx.type || '').toLowerCase();
 
         if (type === 'income' || String(tx.category || '').toLowerCase() === 'sales') {
-          quarterRevenue += amt;
+          periodRevenue += amt;
         } else if (type === 'expense') {
-          quarterExpense += amt;
+          periodExpense += amt;
         }
       }
     });
 
-    const quarterNetProfit = quarterRevenue - quarterExpense;
+    const periodNetProfit = periodRevenue - periodExpense;
 
     return {
       totalStockTransferred,
       totalDividendsPaid,
       currentStockFundBalance,
-      quarterRevenue,
-      quarterExpense,
-      quarterNetProfit
+      periodRevenue,
+      periodExpense,
+      periodNetProfit
     };
-  }, [transactions, selectedYear, selectedQuarter]);
+  }, [transactions, customStartDate, customEndDate]);
 
-  // 3. ບັນທຶກ Settle ປັນຜົນ
+  // 3. ບັນທຶກ Settle ປັນຜົນໄຕຣມາດ (ພ້ອມບັນທຶກຊ່ວງວັນທີ ແລະ Note)
   const handleSaveSettlement = async (e: React.FormEvent) => {
     e.preventDefault();
     const divAmount = Number(payoutDividendAmount.replace(/,/g, '')) || 0;
@@ -130,11 +142,13 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
         branchId: currentBranch,
         year: selectedYear,
         quarter: selectedQuarter,
-        quarterNetProfit: financialMetrics.quarterNetProfit,
+        startDate: customStartDate,
+        endDate: customEndDate,
+        periodNetProfit: financialMetrics.periodNetProfit,
         transferredToStock: stockAmount,
         dividendPaid: divAmount,
         paymentMethod: payoutMethod,
-        remark: settleRemark.trim() || `ປັນຜົນໄຕຣມາດ ${selectedQuarter}/${selectedYear}`,
+        remark: settleRemark.trim() || `ປັນຜົນໄຕຣມາດ ${selectedQuarter}/${selectedYear} (${customStartDate} ຫາ ${customEndDate})`,
         date: format(new Date(), 'yyyy-MM-dd'),
         createdAt: serverTimestamp(),
         userId: auth.currentUser?.uid || 'admin'
@@ -148,7 +162,7 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
           quarter: `${selectedYear}-${selectedQuarter}`,
           amount: divAmount,
           paymentMethod: payoutMethod,
-          remark: `ຈ່າຍປັນຜົນ ${selectedQuarter}/${selectedYear} (Settle)`,
+          remark: `ຈ່າຍປັນຜົນ ${selectedQuarter}/${selectedYear}: ${settleRemark.trim()}`,
           date: format(new Date(), 'yyyy-MM-dd'),
           createdAt: serverTimestamp(),
           userId: auth.currentUser?.uid || 'admin'
@@ -181,35 +195,81 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
     }
   };
 
-  // 4. 🌟 ຍ້າຍລາຍຈ່າຍເກົ່າ ➔ ປ່ຽນເປັນປັນຜົນ Q1-Q4
-  const handleMigrateExpenseToDividend = async (txId: string, quarter: string, year: number) => {
+  // 4. 🌟 ດຶງລາຍການທີ່ມີຢູ່ແລ້ວ (ເຊັ່ນ 2 ລາຍການໃນຮູບ) ຜູກເຂົ້າ Q ທີ່ເລືອກ
+  const handleLinkTransactionsToQuarter = async () => {
+    if (selectedTxIdsToLink.length === 0) {
+      alert('ກະລຸນາຕິກເລືອກລາຍການທີ່ຕ້ອງການຜູກກ່ອນ!');
+      return;
+    }
+
     try {
-      await updateDoc(doc(db, 'transactions', txId), {
-        type: 'dividend',
-        category: 'dividend',
-        quarter: `${year}-${quarter}`,
-        migratedAt: serverTimestamp()
+      setSaving(true);
+      let totalLinkedAmount = 0;
+
+      for (const id of selectedTxIdsToLink) {
+        const tx = transactions.find(t => t.id === id);
+        if (tx) {
+          totalLinkedAmount += Number(tx.amount || 0);
+          await updateDoc(doc(db, 'transactions', id), {
+            type: 'dividend',
+            category: 'dividend',
+            quarter: `${targetLinkYear}-${targetLinkQuarter}`,
+            isSettled: true,
+            linkedToQuarter: `${targetLinkYear}-${targetLinkQuarter}`,
+            updatedAt: serverTimestamp()
+          });
+        }
+      }
+
+      // ບັນທຶກ Settlement Record ໃຫ້ອັດຕະໂນມັດ
+      const settlementId = `settle_${currentBranch}_${targetLinkYear}_${targetLinkQuarter}_linked_${Date.now()}`;
+      await setDoc(doc(db, 'dividend_settlements', settlementId), {
+        branchId: currentBranch,
+        year: targetLinkYear,
+        quarter: targetLinkQuarter,
+        startDate: customStartDate,
+        endDate: customEndDate,
+        dividendPaid: totalLinkedAmount,
+        transferredToStock: 0,
+        paymentMethod: 'Mixed',
+        remark: `ດຶງລາຍການປັນຜົນທີ່ມີຢູ່ແລ້ວຈຳນວນ ${selectedTxIdsToLink.length} ລາຍການ ຜູກເຂົ້າ ${targetLinkQuarter}/${targetLinkYear}`,
+        date: format(new Date(), 'yyyy-MM-dd'),
+        linkedTxIds: selectedTxIdsToLink,
+        createdAt: serverTimestamp()
       });
-      alert(`🎉 ຍ້າຍລາຍການນີ້ໄປເປັນ "ປັນຜົນ ${quarter}/${year}" ສຳເລັດ! (ລາຍຈ່າຍເດືອນເກົ່າຫຼຸດລົງແລ້ວ)`);
+
+      alert(`🎉 ສຳເລັດ! ໄດ້ຜູກ ${selectedTxIdsToLink.length} ລາຍການ (ລວມ ${totalLinkedAmount.toLocaleString()} ₭) ເຂົ້າເປັນປັນຜົນ ${targetLinkQuarter}/${targetLinkYear} ຮຽບຮ້ອຍ!`);
+      setSelectedTxIdsToLink([]);
+      setShowLinkModal(false);
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      alert('Error linking transactions: ' + err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
-  const candidateExpenses = useMemo(() => {
+  // ລາຍການທີ່ສາມາດດຶງມາຜູກໄດ້ (ລວມທັງ 2 ລາຍການໃນຮູບ)
+  const linkableTransactions = useMemo(() => {
     return transactions.filter(tx => {
-      const isExpense = tx.type === 'expense';
-      const remark = String(tx.remark || '').toLowerCase();
+      const type = String(tx.type || '').toLowerCase();
       const cat = String(tx.category || '').toLowerCase();
-      const matchSearch = migrateSearch 
-        ? (remark.includes(migrateSearch.toLowerCase()) || cat.includes(migrateSearch.toLowerCase()) || String(tx.amount).includes(migrateSearch))
-        : (remark.includes('ປັນຜົນ') || cat.includes('ປັນຜົນ') || remark.includes('dividend') || remark.includes('ຖອນ') || remark.includes('stock'));
-      return isExpense && matchSearch;
+      const remark = String(tx.remark || '').toLowerCase();
+
+      // ກວດຫາລາຍການທີ່ເປັນ dividend ຫຼື ມີຄຳວ່າ ປັນຜົນ
+      const isDividendOrExpense = type === 'dividend' || cat === 'dividends' || cat === 'dividend' || type === 'expense';
+      const isRelevant = cat.includes('dividend') || remark.includes('ປັນຜົນ') || cat.includes('ປັນຜົນ') || type === 'dividend';
+
+      const matchSearch = linkSearch 
+        ? (remark.includes(linkSearch.toLowerCase()) || cat.includes(linkSearch.toLowerCase()) || String(tx.amount).includes(linkSearch) || String(tx.date).includes(linkSearch))
+        : true;
+
+      return isDividendOrExpense && isRelevant && matchSearch;
     });
-  }, [transactions, migrateSearch]);
+  }, [transactions, linkSearch]);
 
   return (
     <div className="space-y-6">
+
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-white dark:bg-[#073069] rounded-[2rem] border border-slate-200/80 dark:border-white/10 shadow-sm">
         <div className="flex items-center gap-3.5">
@@ -221,21 +281,22 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
               {i18n.language === 'la' ? 'ປັນຜົນໄຕຣມາດ & ເງິນແຮ່ໝູນວຽນ (Stock Fund)' : 'Quarterly Dividends & Reserve Stock Fund'}
             </h2>
             <p className="text-[10px] text-slate-400 font-bold uppercase mt-0.5">
-              Profit Settlement & Retained Capital Engine
+              Custom Period Settlement & Transaction Linking
             </p>
           </div>
         </div>
 
+        {/* 🌟 ປຸ່ມດຶງລາຍການທີ່ມີຢູ່ແລ້ວຜູກເຂົ້າ Q2 */}
         <button
-          onClick={() => setShowMigrateModal(true)}
+          onClick={() => setShowLinkModal(true)}
           className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white rounded-xl text-xs font-black uppercase flex items-center gap-1.5 shadow-md cursor-pointer"
         >
-          <ArrowRightLeft className="w-3.5 h-3.5" />
-          <span>ຍ້າຍລາຍຈ່າຍເກົ່າໄປເປັນປັນຜົນ</span>
+          <Link2 className="w-3.5 h-3.5" />
+          <span>ດຶງລາຍການທີ່ມີແລ້ວຜູກເຂົ້າ Q</span>
         </button>
       </div>
 
-      {/* 4 KPI Cards (ລວມທັງ Card ເງິນ Stock) */}
+      {/* 4 KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: ເງິນແຮ່ໝູນວຽນ (ເງິນ Stock) */}
         <div className="bg-gradient-to-br from-emerald-500 to-teal-700 text-white p-5 rounded-3xl shadow-lg space-y-1 relative overflow-hidden">
@@ -270,22 +331,22 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
           </p>
         </div>
 
-        {/* Card 3: ກຳໄລໄຕຣມາດທີ່ເລືອກ */}
+        {/* Card 3: ກຳໄລສະສົມຕາມຊ່ວງວັນທີທີ່ເລືອກ */}
         <div className="bg-white dark:bg-[#073069] p-5 rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-sm space-y-1">
           <div className="flex justify-between items-center">
             <span className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1">
               <ArrowUpRight className="w-3.5 h-3.5 text-blue-500" />
-              ກຳໄລໄຕຣມາດ {selectedQuarter}/{selectedYear}
+              ກຳໄລ {selectedQuarter}/{selectedYear}
             </span>
             <span className="text-[9px] font-black text-indigo-500 uppercase bg-indigo-500/10 px-1.5 py-0.5 rounded">
-              3 ເດືອນ
+              Custom Range
             </span>
           </div>
           <p className="text-2xl font-black font-mono text-blue-600 dark:text-blue-400 mt-1">
-            {Math.round(financialMetrics.quarterNetProfit).toLocaleString()} ₭
+            {Math.round(financialMetrics.periodNetProfit).toLocaleString()} ₭
           </p>
-          <p className="text-[10px] text-slate-400 font-bold">
-            ລາຍຮັບ: {Math.round(financialMetrics.quarterRevenue).toLocaleString()} ₭
+          <p className="text-[9.5px] text-slate-400 font-mono">
+            {customStartDate} ➔ {customEndDate}
           </p>
         </div>
 
@@ -304,28 +365,26 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
         </div>
       </div>
 
-      {/* ຟອມ Settle ປັນຜົນໄຕຣມາດ Q1 - Q4 */}
+      {/* 🌟 ຟອມ Settle ປັນຜົນ (ກຳນົດຊ່ວງວັນທີ ແລະ Note ໄດ້ເອງ) */}
       <div className="bg-white dark:bg-[#073069] p-6 rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl space-y-5">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 dark:border-white/10 pb-4">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3 border-b border-slate-100 dark:border-white/10 pb-4">
           <div>
             <h3 className="text-xs font-black uppercase text-slate-800 dark:text-white flex items-center gap-2">
               <Calendar className="w-4 h-4 text-indigo-500" />
-              <span>ປິດຮອບປັນຜົນໄຕຣມາດ (Quarterly Settlement Desk)</span>
+              <span>ປິດຮອບປັນຜົນໄຕຣມາດ (Custom Period Settlement)</span>
             </h3>
             <p className="text-[10.5px] text-slate-400 mt-0.5">
-              ເລືອກໄຕຣມາດທີ່ຕ້ອງການປັນຜົນ ລະບົບຈະດຶງກຳໄລ 3 ເດືອນມາໃຫ້ອັດຕະໂນມັດ ໂດຍບໍ່ກະທົບລາຍຈ່າຍຂອງເດືອນໃດເລີຍ.
+              ທ່ານສາມາດ<strong>ເລືອກຊ່ວງວັນທີເລີ່ມຕົ້ນ ຫາ ສິ້ນສຸດ ໄດ້ເອງ</strong> ຕາມຮອບການປັນຜົນຕົວຈິງ.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <select
               value={selectedYear}
               onChange={e => setSelectedYear(Number(e.target.value))}
               className="h-9 px-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-bold outline-none cursor-pointer"
             >
-              {[2024, 2025, 2026, 2027].map(y => (
-                <option key={y} value={y}>{y}</option>
-              ))}
+              {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
             </select>
 
             <div className="flex bg-slate-100 dark:bg-black/20 p-1 rounded-xl text-xs font-bold">
@@ -345,6 +404,35 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
           </div>
         </div>
 
+        {/* 🌟 ຊ່ອງກຳນົດຊ່ວງວັນທີເລີ່ມຕົ້ນ - ສິ້ນສຸດ */}
+        <div className="p-4 bg-indigo-50/50 dark:bg-white/5 rounded-2xl border border-indigo-100 dark:border-white/10 space-y-3">
+          <span className="text-[10px] font-black uppercase text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+            <Calendar className="w-3.5 h-3.5" />
+            ກຳນົດຊ່ວງວັນທີຄິດໄລ່ກຳໄລຂອງໄຕຣມາດ {selectedQuarter}/{selectedYear}
+          </span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-[9.5px] font-bold text-slate-400 block mb-1">ວັນທີເລີ່ມຕົ້ນ (Start Date):</label>
+              <input
+                type="date"
+                value={customStartDate}
+                onChange={e => setCustomStartDate(e.target.value)}
+                className="w-full h-10 px-3 rounded-xl bg-white dark:bg-[#073069] border border-slate-200 dark:border-white/10 text-xs font-bold outline-none cursor-pointer"
+              />
+            </div>
+            <div>
+              <label className="text-[9.5px] font-bold text-slate-400 block mb-1">ວັນທີສິ້ນສຸດ (End Date):</label>
+              <input
+                type="date"
+                value={customEndDate}
+                onChange={e => setCustomEndDate(e.target.value)}
+                className="w-full h-10 px-3 rounded-xl bg-white dark:bg-[#073069] border border-slate-200 dark:border-white/10 text-xs font-bold outline-none cursor-pointer"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* ຟອມປ້ອນຍອດ ແລະ Note */}
         <form onSubmit={handleSaveSettlement} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -395,16 +483,18 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
             </div>
           </div>
 
+          {/* 🌟 ຊ່ອງຂຽນ Note / Memo ແບບລະອຽດ */}
           <div>
-            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
-              ໝາຍເຫດ (Remark)
+            <label className="text-[10px] font-black uppercase text-slate-400 block mb-1 flex items-center gap-1">
+              <FileText className="w-3.5 h-3.5 text-indigo-500" />
+              <span>Note / ບັນທຶກເຫດການ (ເພື່ອຈື່ຍ້ອນຫຼັງໄດ້ຊັດເຈນ)</span>
             </label>
-            <input
-              type="text"
-              placeholder={`ຕົວຢ່າງ: ປັນຜົນກຳໄລໄຕຣມາດ ${selectedQuarter}/${selectedYear}`}
+            <textarea
+              rows={2}
+              placeholder={`ຕົວຢ່າງ: ປັນຜົນຮອບ ${selectedQuarter}/${selectedYear} ຕັດຍອດຊ່ວງ ${customStartDate} ຫາ ${customEndDate}. ເຫດຜົນທີ່ຈ່າຍຕົ້ນເດືອນ 6 ເພາະ...`}
               value={settleRemark}
               onChange={e => setSettleRemark(e.target.value)}
-              className="w-full h-10 px-3.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs outline-none"
+              className="w-full p-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs outline-none focus:border-indigo-500"
             />
           </div>
 
@@ -435,23 +525,30 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
             <thead className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400 bg-slate-100/50 dark:bg-white/5">
               <tr>
                 <th className="p-3.5">ວັນທີ Settle</th>
-                <th className="p-3.5">ໄຕຣມາດ</th>
-                <th className="p-3.5 text-right">ກຳໄລໄຕຣມາດ</th>
+                <th className="p-3.5">ໄຕຣມາດ & ຊ່ວງວັນທີ</th>
+                <th className="p-3.5 text-right">ກຳໄລຂອງຊ່ວງນັ້ນ</th>
                 <th className="p-3.5 text-right">ໂອນເຂົ້າ Stock</th>
                 <th className="p-3.5 text-right">ປັນຜົນຈ່າຍອອກ</th>
                 <th className="p-3.5">ຊ່ອງທາງ</th>
-                <th className="p-3.5">ໝາຍເຫດ</th>
+                <th className="p-3.5">Note ບັນທຶກ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-white/5">
               {settlements.map(st => (
                 <tr key={st.id} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-all">
                   <td className="p-3.5 font-mono text-slate-400">{st.date}</td>
-                  <td className="p-3.5 font-black text-indigo-600 dark:text-indigo-400">
-                    {st.quarter}/{st.year}
+                  <td className="p-3.5">
+                    <span className="font-black text-indigo-600 dark:text-indigo-400 block">
+                      {st.quarter}/{st.year}
+                    </span>
+                    {st.startDate && st.endDate && (
+                      <span className="text-[9.5px] text-slate-400 font-mono">
+                        {st.startDate} ➔ {st.endDate}
+                      </span>
+                    )}
                   </td>
                   <td className="p-3.5 text-right font-mono font-bold text-slate-700 dark:text-slate-300">
-                    {Math.round(Number(st.quarterNetProfit || 0)).toLocaleString()} ₭
+                    {Math.round(Number(st.periodNetProfit || st.quarterNetProfit || 0)).toLocaleString()} ₭
                   </td>
                   <td className="p-3.5 text-right font-mono font-bold text-teal-600 dark:text-teal-400">
                     +{Math.round(Number(st.transferredToStock || 0)).toLocaleString()} ₭
@@ -460,7 +557,7 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
                     -{Math.round(Number(st.dividendPaid || 0)).toLocaleString()} ₭
                   </td>
                   <td className="p-3.5 uppercase font-bold text-[10px] text-slate-500">{st.paymentMethod}</td>
-                  <td className="p-3.5 text-slate-500 text-[11px]">{st.remark}</td>
+                  <td className="p-3.5 text-slate-600 dark:text-slate-300 text-[11px] max-w-xs">{st.remark}</td>
                 </tr>
               ))}
             </tbody>
@@ -468,50 +565,53 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
         </div>
       </div>
 
-      {/* MODAL ຍ້າຍລາຍຈ່າຍເກົ່າ ➔ ປ່ຽນເປັນປັນຜົນ Q1 - Q4 */}
-      {showMigrateModal && (
+      {/* ======================================================== */}
+      {/* 🌟 MODAL ດຶງລາຍການທີ່ມີຢູ່ແລ້ວ (ເຊັ່ນ 2 ລາຍການໃນຮູບ) ຜູກເຂົ້າ Q2 */}
+      {/* ======================================================== */}
+      {showLinkModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-white dark:bg-[#073069] w-full max-w-3xl rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 dark:border-white/10 pb-3">
               <div className="flex items-center gap-2">
-                <ArrowRightLeft className="w-5 h-5 text-indigo-500" />
+                <Link2 className="w-5 h-5 text-indigo-500" />
                 <h3 className="text-sm font-black uppercase text-slate-800 dark:text-white">
-                  ຍ້າຍລາຍຈ່າຍເກົ່າໄປເປັນ "ປັນຜົນໄຕຣມາດ (Q1 - Q4)"
+                  ດຶງລາຍການທີ່ມີຢູ່ແລ້ວ ຜູກເຂົ້າໄຕຣມາດ (Q)
                 </h3>
               </div>
-              <button onClick={() => setShowMigrateModal(false)} className="cursor-pointer text-slate-400">
+              <button onClick={() => setShowLinkModal(false)} className="cursor-pointer text-slate-400">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <p className="text-xs text-slate-500 dark:text-slate-300">
-              ເລືອກລາຍການທີ່ເຄີຍບັນທຶກຜິດວ່າເປັນ "ລາຍຈ່າຍ (Expense)" ແລ້ວຍ້າຍໄປເປັນ **ປັນຜົນໄຕຣມາດ**. ລາຍຈ່າຍເດືອນນັ້ນຈະຫຼຸດລົງ ແລະ ກຳໄລຈະກັບມາງາມຄືເກົ່າ!
+              ຕິກເລືອກລາຍການປັນຜົນທີ່ເຄີຍບັນທຶກໄວ້ (ເຊັ່ນ 2 ລາຍການໃນວັນທີ 02/06/2026) ເພື່ອຜູກເຂົ້າ **{targetLinkQuarter}/{targetLinkYear}** ໂດຍບໍ່ເຮັດໃຫ້ເງິນສົດຖືກຕັດຊ້ຳສອງ:
             </p>
 
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <div className="relative flex-1 w-full">
                 <input
                   type="text"
-                  placeholder="ຄົ້ນຫາຊື່ບິນ ຫຼື ຈຳນວນເງິນ..."
-                  value={migrateSearch}
-                  onChange={e => setMigrateSearch(e.target.value)}
+                  placeholder="ຄົ້ນຫາ ວັນທີ, ຊື່ ຫຼື ຈຳນວນເງິນ..."
+                  value={linkSearch}
+                  onChange={e => setLinkSearch(e.target.value)}
                   className="w-full h-10 pl-8 pr-3 rounded-xl bg-slate-50 dark:bg-white/5 border text-xs outline-none"
                 />
                 <Search className="absolute left-2.5 top-3 w-4 h-4 text-slate-400" />
               </div>
 
               <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-400">ຜູກເຂົ້າ:</span>
                 <select
-                  value={targetMigrateYear}
-                  onChange={e => setTargetMigrateYear(Number(e.target.value))}
+                  value={targetLinkYear}
+                  onChange={e => setTargetLinkYear(Number(e.target.value))}
                   className="h-10 px-2 rounded-xl bg-slate-50 dark:bg-white/5 border text-xs font-bold"
                 >
                   {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
 
                 <select
-                  value={targetMigrateQuarter}
-                  onChange={e => setTargetMigrateQuarter(e.target.value)}
+                  value={targetLinkQuarter}
+                  onChange={e => setTargetLinkQuarter(e.target.value)}
                   className="h-10 px-2 rounded-xl bg-slate-50 dark:bg-white/5 border text-xs font-bold"
                 >
                   <option value="Q1">Q1 (ເດືອນ 1-3)</option>
@@ -522,52 +622,86 @@ export default function DividendSettlement({ selectedBranch }: { selectedBranch?
               </div>
             </div>
 
+            {/* ລາຍການທີ່ພົບເຫັນ */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-              {candidateExpenses.length === 0 ? (
+              {linkableTransactions.length === 0 ? (
                 <div className="text-center py-8 text-slate-400 text-xs">
-                  ບໍ່ພົບລາຍຈ່າຍທີ່ຕົງກັບເງື່ອນໄຂ (ລອງພິມຄຳຄົ້ນຫາໃນຊ່ອງຄົ້ນຫາ)
+                  ບໍ່ພົບລາຍການທີ່ຕົງກັບເງື່ອນໄຂ
                 </div>
               ) : (
-                candidateExpenses.map(tx => (
-                  <div 
-                    key={tx.id}
-                    className="p-3.5 bg-slate-50 dark:bg-white/5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border border-slate-100 dark:border-white/5"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs font-black text-rose-500">
-                          {Math.round(Number(tx.amount || 0)).toLocaleString()} ₭
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono">{tx.date}</span>
-                        <span className="text-[9px] px-1.5 py-0.2 bg-slate-200 dark:bg-white/10 rounded font-bold uppercase">
-                          {tx.paymentMethod || 'Cash'}
-                        </span>
-                      </div>
-                      <p className="text-xs font-bold text-slate-800 dark:text-white mt-0.5">
-                        {tx.remark || tx.category || 'Expense item'}
-                      </p>
-                    </div>
+                linkableTransactions.map(tx => {
+                  const isChecked = selectedTxIdsToLink.includes(tx.id);
 
-                    <button
-                      type="button"
-                      onClick={() => handleMigrateExpenseToDividend(tx.id, targetMigrateQuarter, targetMigrateYear)}
-                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black uppercase flex items-center gap-1 cursor-pointer shrink-0"
+                  return (
+                    <div 
+                      key={tx.id}
+                      onClick={() => {
+                        setSelectedTxIdsToLink(prev => 
+                          prev.includes(tx.id) ? prev.filter(i => i !== tx.id) : [...prev, tx.id]
+                        );
+                      }}
+                      className={`p-3.5 rounded-2xl flex items-center justify-between gap-3 border transition-all cursor-pointer ${
+                        isChecked 
+                          ? 'bg-indigo-50/80 dark:bg-indigo-900/20 border-indigo-500' 
+                          : 'bg-slate-50 dark:bg-white/5 border-slate-100 dark:border-white/5 hover:border-slate-300'
+                      }`}
                     >
-                      <ArrowRightLeft className="w-3 h-3" />
-                      <span>ຍ້າຍໄປ {targetMigrateQuarter}/{targetMigrateYear}</span>
-                    </button>
-                  </div>
-                ))
+                      <div className="flex items-center gap-3">
+                        <button type="button" className="text-indigo-600 dark:text-indigo-400">
+                          {isChecked ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5 text-slate-400" />}
+                        </button>
+
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-black text-rose-500">
+                              -{Math.round(Number(tx.amount || 0)).toLocaleString()} ₭
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono">{tx.date}</span>
+                            <span className="text-[9px] px-1.5 py-0.2 bg-slate-200 dark:bg-white/10 rounded font-bold uppercase">
+                              {tx.paymentMethod || 'Cash'}
+                            </span>
+                          </div>
+                          <p className="text-xs font-bold text-slate-800 dark:text-white mt-0.5">
+                            {tx.remark || tx.category || 'Dividends payout'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {tx.quarter && (
+                        <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-emerald-500/10 text-emerald-600 rounded-md">
+                          ຜູກແລ້ວ: {tx.quarter}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
 
-            <div className="pt-2 border-t border-slate-100 dark:border-white/10">
-              <button
-                onClick={() => setShowMigrateModal(false)}
-                className="w-full h-10 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 text-slate-800 dark:text-white text-xs font-black uppercase rounded-xl cursor-pointer"
-              >
-                ປິດໜ້າຕ່າງ
-              </button>
+            {/* ປຸ່ມຢືນຢັນການຜູກ */}
+            <div className="pt-3 border-t border-slate-100 dark:border-white/10 flex justify-between items-center">
+              <span className="text-xs font-bold text-slate-500">
+                ເລືອກແລ້ວ: <strong className="text-indigo-600 dark:text-indigo-400">{selectedTxIdsToLink.length}</strong> ລາຍການ
+              </span>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowLinkModal(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700 cursor-pointer"
+                >
+                  ຍົກເລີກ
+                </button>
+                <button
+                  type="button"
+                  disabled={saving || selectedTxIdsToLink.length === 0}
+                  onClick={handleLinkTransactionsToQuarter}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase flex items-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  <span>{saving ? 'ກຳລັງຜູກ...' : `ຢືນຢັນຜູກເຂົ້າ ${targetLinkQuarter}/${targetLinkYear}`}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
