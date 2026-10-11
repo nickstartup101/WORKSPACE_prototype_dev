@@ -16,7 +16,6 @@ import { format, subMonths, addMonths } from 'date-fns';
 import { utils, writeFile } from 'xlsx';
 import { useTranslation } from 'react-i18next';
 
-// ຊື່ເດືອນພາສາລາວ ແລະ ອັງກິດ
 const LAO_MONTHS = [
   'ມັງກອນ (Jan)', 'ກຸມພາ (Feb)', 'ມີນາ (Mar)', 'ເມສາ (Apr)', 
   'ພຶດສະພາ (May)', 'ມິຖຸນາ (Jun)', 'ກໍລະກົດ (Jul)', 'ສິງຫາ (Aug)', 
@@ -28,12 +27,11 @@ interface PhysicalCountRow {
   partialPercent: number;
 }
 
-// 🌟 ໂຄງສ້າງກົດເກນ Prefix ຂອງ SKU
 interface SkuPrefixRule {
   id: string;
-  prefix: string;   // ຕົວອັກສອນຂຶ້ນຕົ້ນ ເຊັ່ນ: P, S, O, EQ
-  name: string;     // ຊື່ກຸ່ມ ເຊັ່ນ: ວັດຖຸດິບ, Packaging
-  isCogs: boolean;  // ນັບເຂົ້າ COGS ຫຼື ບໍ່
+  prefix: string;
+  name: string;
+  isCogs: boolean;
 }
 
 const DEFAULT_SKU_RULES: SkuPrefixRule[] = [
@@ -47,7 +45,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const { i18n } = useTranslation();
   const currentBranch = selectedBranch || 'branch_1';
 
-  // 🛡️ ຟັງຊັນແປງວັນທີປອດໄພ
   const toStandardDate = (raw: any): string => {
     if (!raw) return '';
     if (typeof raw === 'string') {
@@ -64,7 +61,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     return '';
   };
 
-  // 🛡️ ຟັງຊັນປົດວັນນະຍຸດລາວ
   const normalizeLaoDeep = (str: any): string => {
     if (!str || typeof str !== 'string') return '';
     try {
@@ -92,17 +88,14 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const [mappingUpdatingId, setMappingUpdatingId] = useState<string | null>(null);
   const [autoMatchingLoading, setAutoMatchingLoading] = useState(false);
 
-  // Modal ຈັດການກົດເກນ SKU
   const [showRuleModal, setShowRuleModal] = useState(false);
   const [newPrefix, setNewPrefix] = useState('');
   const [newRuleName, setNewRuleName] = useState('');
   const [newRuleIsCogs, setNewRuleIsCogs] = useState(true);
 
-  // ປະຕິທິນ: ເລືອກເດືອນ
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const selectedMonth = useMemo(() => format(currentDate, 'yyyy-MM'), [currentDate]);
 
-  // Filters
   const [selectedProductIds, setSelectedProductIds] = useState<Record<string, boolean>>(() => {
     try {
       const saved = localStorage.getItem(`cogs_selected_items_${currentBranch}`);
@@ -119,12 +112,10 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const [mappingSearch, setMappingSearch] = useState('');
   const [physicalCounts, setPhysicalCounts] = useState<Record<string, PhysicalCountRow>>({});
 
-  // 🌟 ຟັງຊັນຈັດກຸ່ມອັດຕະໂນມັດຈາກເລກ SKU
   const classifySku = (skuStr: string): { groupName: string; isCogs: boolean; prefix: string } => {
     const clean = String(skuStr || '').trim().toUpperCase();
     if (!clean) return { groupName: 'ຍັງບໍ່ມີ SKU', isCogs: false, prefix: '' };
 
-    // ຮຽງຕາມຄວາມຍາວຂອງ Prefix ເພື່ອໃຫ້ກົງຈຸດທີ່ສຸດ (ເຊັ່ນ: EQ ມາກ່ອນ E)
     const sorted = [...skuRules].sort((a, b) => b.prefix.length - a.prefix.length);
     const matched = sorted.find(r => clean.startsWith(r.prefix.toUpperCase()));
 
@@ -134,7 +125,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     return { groupName: 'ອື່ນໆ (General)', isCogs: false, prefix: 'OTHER' };
   };
 
-  // 1. ດຶງຂໍ້ມູນ Real-time + SKU Rules ຈາກ Firestore
   useEffect(() => {
     const unsubP = onSnapshot(collection(db, 'products'), snap => {
       const prods = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -181,7 +171,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     };
   }, [currentBranch]);
 
-  // 2. ດຶງຂໍ້ມູນການກວດນັບຂອງເດືອນທີ່ເລືອກ
   useEffect(() => {
     async function loadMonthlyStockCount() {
       try {
@@ -206,7 +195,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
   const handlePrevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
   const handleNextMonth = () => setCurrentDate(prev => addMonths(prev, 1));
 
-  // 3. ຈັດການກົດເກນ SKU (Prefix Rules)
   const handleAddSkuRule = async () => {
     const cleanPref = newPrefix.trim().toUpperCase();
     const cleanName = newRuleName.trim();
@@ -225,17 +213,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       await setDoc(doc(db, 'settings', 'cogs_sku_rules'), { rules: updated }, { merge: true });
     } catch {}
 
-    // ອັບເດດການຕິກ COGS ທັນທີ
-    setSelectedProductIds(prev => {
-      const next = { ...prev };
-      products.forEach(p => {
-        const info = classifySku(String(p.sku || ''));
-        next[p.id] = info.isCogs;
-      });
-      localStorage.setItem(`cogs_selected_items_${currentBranch}`, JSON.stringify(next));
-      return next;
-    });
-
     setNewPrefix('');
     setNewRuleName('');
   };
@@ -248,7 +225,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     } catch {}
   };
 
-  // 4. ລວມລາຍການສິນຄ້າຈາກບິນ Supplier + ຄຳແນະນຳຂ້າມຮ້ານ
   const distinctSupplierItems = useMemo(() => {
     const map: Record<string, {
       rawId: string;
@@ -340,8 +316,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
     try {
       setMappingUpdatingId(supplierKey);
-
-      // ກຳນົດກຸ່ມອັດຕະໂນມັດຕາມ SKU
       const autoGroup = classifySku(targetSku);
 
       let targetProduct = products.find(p => String(p?.sku || '').toUpperCase() === targetSku);
@@ -374,7 +348,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         updatedAt: serverTimestamp()
       });
 
-      // ຕັ້ງຄ່າ COGS ອັດຕະໂນມັດຕາມ SKU
       setSelectedProductIds(prev => {
         const next = { ...prev, [targetProduct.id]: autoGroup.isCogs };
         localStorage.setItem(`cogs_selected_items_${currentBranch}`, JSON.stringify(next));
@@ -480,7 +453,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     }
   };
 
-  // 5. ຄິດໄລ່ WAC & Actual COGS
   const calculationResults = useMemo(() => {
     const monthStart = `${selectedMonth}-01`;
     const monthEnd = `${selectedMonth}-31`;
@@ -560,8 +532,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
     const roster = (products || []).map(p => {
       const skuStr = String(p?.sku || '').trim().toUpperCase();
       const skuInfo = classifySku(skuStr);
-
-      // 🌟 ຕັດສິນໃຈວ່າລາຍການນີ້ຖືກຕິກ COGS ບໍ່ (ອີງຕາມກົດເກນ SKU ຫຼື Checkbox)
       const isSelected = selectedProductIds[p.id] !== undefined ? selectedProductIds[p.id] : skuInfo.isCogs;
 
       const skuKey = skuStr || String(p?.id || '').trim();
@@ -598,7 +568,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
       };
     });
 
-    // ຈັດລຽງໃຫ້ SKU ຮຽງຕາມກຸ່ມຢ່າງສວຍງາມ (P ມາກ່ອນ, ຕາມດ້ວຍ S, O...)
     roster.sort((a, b) => a.sku.localeCompare(b.sku));
 
     const actualCogs = Math.max(0, totalPurchasesThisMonth - totalEndingInventoryValue);
@@ -677,7 +646,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
 
   return (
     <div className="space-y-6">
-
       {/* Header Bar + ປະຕິທິນລາວ-ອັງກິດ */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 bg-white dark:bg-[#073069] rounded-[2rem] border border-slate-200/80 dark:border-white/10 shadow-sm">
         <div className="flex items-center gap-3.5">
@@ -754,12 +722,9 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         </div>
       </div>
 
-      {/* ======================================================== */}
-      {/* ແທັບທີ 1: ກວດນັບສະຕັອກທ້າຍເດືອນ & ຄິດໄລ່ ACTUAL COGS */}
-      {/* ======================================================== */}
+      {/* ແທັບທີ 1: ກວດນັບສະຕັອກ & COGS */}
       {activeTab === 'stocktake' && (
         <div className="space-y-6">
-          {/* KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="bg-white dark:bg-[#073069] p-4 sm:p-5 rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-sm space-y-1">
               <span className="text-[9.5px] font-black uppercase text-slate-400 flex items-center gap-1">
@@ -807,7 +772,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
             </div>
           </div>
 
-          {/* ຕາຕະລາງກວດນັບສະຕັອກ + Filter ຕາມໝວດ SKU */}
           <div className="bg-white dark:bg-[#073069] rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl overflow-hidden">
             <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-white/10 space-y-3">
               <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
@@ -840,7 +804,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                 </div>
               </div>
 
-              {/* 🌟 Filter ຕາມ Prefix ຂອງ SKU (ເຊັ່ນ: ໝວດ P, ໝວດ S, ໝວດ O...) */}
+              {/* Filter ຕາມ Prefix ຂອງ SKU */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-white/5">
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
@@ -873,7 +837,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                   </button>
                 </div>
 
-                {/* ປຸ່ມກັ່ນຕອງໝວດ SKU */}
                 <div className="flex items-center gap-1 overflow-x-auto">
                   <Filter className="w-3 h-3 text-slate-400 mr-1" />
                   <button
@@ -964,7 +927,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
                           )}
                         </td>
 
-                        {/* 🌟 ສະແດງກຸ່ມທີ່ລະບົບອ່ານອອກມາຈາກ SKU ອັດຕະໂນມັດ */}
                         <td className="p-3.5">
                           <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase inline-flex items-center gap-1 ${
                             item.prefix === 'P' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
@@ -1025,9 +987,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         </div>
       )}
 
-      {/* ======================================================== */}
       {/* ແທັບທີ 2: ສູນປ້ອນ / ຈັບຄູ່ SKU */}
-      {/* ======================================================== */}
       {activeTab === 'sku_mapping' && (
         <div className="bg-white dark:bg-[#073069] rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl overflow-hidden space-y-4">
           <div className="p-5 border-b border-slate-100 dark:border-white/10 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
@@ -1202,9 +1162,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
         </div>
       )}
 
-      {/* ======================================================== */}
-      {/* 🌟 MODAL ກຳນົດກົດເກນ SKU (SKU PREFIX RULE MANAGER) */}
-      {/* ======================================================== */}
+      {/* MODAL ຕັ້ງຄ່າກົດເກນ SKU */}
       {showRuleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-white dark:bg-[#073069] w-full max-w-lg rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-5">
@@ -1212,7 +1170,7 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
               <div className="flex items-center gap-2">
                 <Settings className="w-5 h-5 text-indigo-500" />
                 <h3 className="text-sm font-black uppercase text-slate-800 dark:text-white">
-                  ກຳນົດກົດເກນ Prefix ຂອງ SKU (SKU Architecture)
+                  ກຳນົດກົດເກນ Prefix ຂອງ SKU
                 </h3>
               </div>
               <button 
@@ -1227,7 +1185,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
               ລະບົບຈະອ່ານຕົວອັກສອນທຳອິດຂອງ SKU ແລ້ວຈັດກຸ່ມ + ນັບເຂົ້າ COGS ໃຫ້ອັດຕະໂນມັດ ໂດຍບໍ່ຕ້ອງມານັ່ງເລືອກກຸ່ມເອງ:
             </p>
 
-            {/* ຟອມເພີ່ມ Prefix ໃໝ່ */}
             <div className="p-3.5 bg-slate-50 dark:bg-white/5 rounded-2xl space-y-2.5 border border-slate-200 dark:border-white/10">
               <span className="text-[10px] font-black uppercase text-slate-400">ເພີ່ມກົດເກນ SKU ໃໝ່</span>
               <div className="grid grid-cols-12 gap-2">
@@ -1265,7 +1222,6 @@ export default function CogsIntelligence({ selectedBranch }: { selectedBranch?: 
               </div>
             </div>
 
-            {/* ລາຍການກົດເກນ SKU ທີ່ມີໃນປັດຈຸບັນ */}
             <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
               {skuRules.map(rule => (
                 <div 
