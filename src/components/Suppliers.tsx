@@ -167,7 +167,6 @@ export default function Suppliers() {
     });
   }, [supplierPrices]);
 
-  // Image Processing
   const processImageFile = (file: File) => {
     if (!file || !file.type.startsWith('image/')) {
       alert(i18n.language === 'la' ? 'ກະລຸນາເລືອກໄຟລ໌ຮູບພາບ (JPG, PNG)' : 'Please select an image file.');
@@ -211,7 +210,7 @@ export default function Suppliers() {
   }, []);
 
   // ========================================================
-  // 🌟 AI OCR SCANNER (ອ່ານຮູບຈິງ 100% ດ້ວຍ GOOGLE GEMINI)
+  // 🌟 AI OCR SCANNER (ອັບເກຣດ GEMINI 2.0 / 2.5 ພ້ອມ SMART FALLBACK)
   // ========================================================
   const handleScanReceiptWithAi = async () => {
     if (!billImageBase64) {
@@ -219,7 +218,6 @@ export default function Suppliers() {
       return;
     }
 
-    // ຖ້າຫາກຍັງບໍ່ທັນມີ API Key ໃຫ້ຂຶ້ນ Modal ໃຫ້ປ້ອນທັນທີ
     if (!geminiApiKey) {
       setShowApiKeyModal(true);
       return;
@@ -229,9 +227,10 @@ export default function Suppliers() {
       setIsAiScanning(true);
 
       const base64Data = billImageBase64.split(',')[1];
+      const mimeType = billImageBase64.split(';')[0].split(':')[1] || 'image/jpeg';
 
       const promptText = `
-You are a highly accurate digital receipt scanner for a cafe & restaurant in Laos and Thailand.
+You are an expert digital receipt scanner for a cafe & restaurant in Laos and Thailand.
 Examine this actual receipt image very carefully.
 Extract the REAL details printed on this receipt:
 1. "supplier": Match to one of [LUCKKHANA, CHANHOM, LATDA, HEAVENLY, DMART, MARRY ANN, LA TERRASSE, VIS, OTHER] based on store name or logo.
@@ -250,35 +249,56 @@ Format:
 {"supplier":"","date":"","time":"","currency":"","items":[{"name":"","quantity":1,"pricePerUnit":0,"totalPrice":0,"unit":""}]}
 `;
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: promptText },
-                { inline_data: { mime_type: 'image/jpeg', data: base64Data } }
-              ]
-            }
-          ],
-          generationConfig: {
-            temperature: 0.1
-          }
-        })
-      });
+      // 🌟 ລາຍຊື່ Model ໃໝ່ລ່າສຸດ (Gemini 2.0 / 2.5 / 1.5) ເພື່ອລອງເອີ້ນແບບອັດຕະໂນມັດ
+      const CANDIDATE_MODELS = [
+        'gemini-2.0-flash',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash-exp',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash'
+      ];
 
-      const resData = await response.json();
-      
-      if (resData.error) {
-        throw new Error(resData.error.message || 'Gemini API Error');
+      let aiResultJson: any = null;
+      let lastErrorMessage = '';
+
+      for (const model of CANDIDATE_MODELS) {
+        try {
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { text: promptText },
+                    { inlineData: { mimeType: mimeType, data: base64Data } }
+                  ]
+                }
+              ]
+            })
+          });
+
+          const resData = await response.json();
+          if (resData.error) {
+            lastErrorMessage = resData.error.message;
+            continue; // ລອງ Model ຖັດໄປທັນທີ
+          }
+
+          const rawReply = resData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            aiResultJson = JSON.parse(jsonMatch[0]);
+            break; // ສຳເລັດແລ້ວ!
+          }
+        } catch (e: any) {
+          lastErrorMessage = e.message;
+        }
       }
 
-      const rawReply = resData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      const cleanJsonStr = rawReply.replace(/```json/g, '').replace(/```/g, '').trim();
-      const aiResultJson = JSON.parse(cleanJsonStr);
+      if (!aiResultJson) {
+        throw new Error(lastErrorMessage || 'ບໍ່ພົບ Model ທີ່ຮອງຮັບໃນ API Key ນີ້');
+      }
 
-      // ກຳນົດຄ່າທີ່ AI ອ່ານໄດ້ຈາກຮູບຈິງ
       if (aiResultJson.supplier) {
         const matchedSup = Object.keys(SUPPLIER_CODES).find(k => k.toLowerCase() === String(aiResultJson.supplier).toLowerCase()) || 'OTHER';
         setScannedSupplier(matchedSup);
@@ -287,21 +307,17 @@ Format:
       if (aiResultJson.time) setScannedTime(aiResultJson.time);
       if (aiResultJson.currency) setScannedCurrency(aiResultJson.currency);
 
-      // 🌟 ຈັບຄູ່ສິນຄ້າອັດຕະໂນມັດ (Knowledge Base + Products)
       const matchedItems: ScannedItemPreview[] = (aiResultJson.items || []).map((it: any) => {
         const cleanNameKey = String(it.name || '').trim().toLowerCase().replace(/\s+/g, '_');
         
         let targetProdId = '';
         let targetProdName = '';
 
-        // 1. ກວດຈາກຖານຂໍ້ມູນທີ່ເຄີຍ Learn ມາກ່ອນ
         if (receiptLearnings[cleanNameKey]?.productId) {
           targetProdId = receiptLearnings[cleanNameKey].productId;
           const found = products.find(p => p.id === targetProdId);
           targetProdName = found?.name || receiptLearnings[cleanNameKey].productName;
-        } 
-        // 2. ຖ້າບໍ່ເຄີຍ Learn -> ຊອກຫາຊື່ທີ່ຄ້າຍຄືກັນໃນ Products
-        else {
+        } else {
           const directMatch = products.find(p => 
             p.name.toLowerCase().includes(String(it.name || '').toLowerCase()) || 
             String(it.name || '').toLowerCase().includes(p.name.toLowerCase())
@@ -567,7 +583,6 @@ Format:
         </div>
 
         <div className="flex items-center gap-2">
-          {/* ປຸ່ມຕັ້ງຄ່າ API Key */}
           <button
             onClick={() => {
               setTempApiKeyInput(geminiApiKey);
@@ -638,7 +653,6 @@ Format:
                   isDragging ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-300 dark:border-white/15 bg-slate-50 dark:bg-[#052659]/50'
                 }`}
               >
-                {/* 🌟 Laser Scanning Beam Animation */}
                 {isAiScanning && (
                   <div className="absolute inset-0 z-30 pointer-events-none overflow-hidden">
                     <div className="w-full h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_15px_#22d3ee] animate-bounce" />
@@ -1033,9 +1047,7 @@ Format:
 
       </div>
 
-      {/* ======================================================== */}
-      {/* 🌟 MODAL ໃສ່ GEMINI API KEY (ຟຣີ) */}
-      {/* ======================================================== */}
+      {/* Modal ຕັ້ງຄ່າ API Key */}
       {showApiKeyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-white dark:bg-[#073069] w-full max-w-md rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
@@ -1052,7 +1064,7 @@ Format:
             </div>
 
             <p className="text-xs text-slate-500 dark:text-slate-300">
-              ເພື່ອໃຫ້ AI ສາມາດອ່ານຮູບໃບບິນຕົວຈິງໄດ້ (ທຸກຮ້ານ ທຸກພາສາ), ທ່ານຕ້ອງມີ Google API Key (ຟຣີ 100%):
+              ເພື່ອໃຫ້ AI ອ່ານໃບບິນຕົວຈິງໄດ້ທຸກຮ້ານ ທຸກພາສາ (ຟຣີ 100%):
             </p>
 
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-[11px] text-amber-700 dark:text-amber-300 space-y-1">
@@ -1093,9 +1105,7 @@ Format:
         </div>
       )}
 
-      {/* ======================================================== */}
-      {/* 🌟 MODAL ກວດສອບ & ຈັບຄູ່ສິນຄ້າຈາກ AI SCANNER (AI REVIEW & LEARN) */}
-      {/* ======================================================== */}
+      {/* Modal ສະແກນໃບບິນ & ຈັບຄູ່ */}
       {showScanReviewModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-white dark:bg-[#073069] w-full max-w-3xl rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4 max-h-[90vh] flex flex-col">
@@ -1103,7 +1113,7 @@ Format:
               <div className="flex items-center gap-2">
                 <Bot className="w-5 h-5 text-indigo-500" />
                 <h3 className="text-sm font-black uppercase text-slate-800 dark:text-white">
-                  ຜົນການສະແກນໃບບິນ & ຈັບຄູ່ສິນຄ້າ (AI Scan & Learn)
+                  ຜົນການສະແກນໃບບິນຕົວຈິງ & ຈັບຄູ່ສິນຄ້າ (AI Scan & Learn)
                 </h3>
               </div>
               <button onClick={() => setShowScanReviewModal(false)} className="cursor-pointer text-slate-400">
