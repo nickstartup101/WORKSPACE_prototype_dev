@@ -248,6 +248,43 @@ Return ONLY raw valid JSON with no markdown wrapping and no backticks.
 Format:
 {"supplier":"","date":"","time":"","currency":"","items":[{"name":"","quantity":1,"pricePerUnit":0,"totalPrice":0,"unit":""}]}
 `;
+      // 🌟 ຮອງຮັບທັງ Key ແບບໃໝ່ (AQ...) ແລະ ແບບເກົ່າ (AIzaSy...)
+      for (const model of CANDIDATE_MODELS) {
+        try {
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'x-goog-api-key': geminiApiKey // 👈 ສົ່ງຜ່ານ Header ຕາມມາດຕະຖານໃໝ່ຂອງ Google
+            },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { text: promptText },
+                    { inlineData: { mimeType: mimeType, data: base64Data } }
+                  ]
+                }
+              ]
+            })
+          });
+
+          const resData = await response.json();
+          if (resData.error) {
+            lastErrorMessage = resData.error.message;
+            continue;
+          }
+
+          const rawReply = resData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const jsonMatch = rawReply.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            aiResultJson = JSON.parse(jsonMatch[0]);
+            break;
+          }
+        } catch (e: any) {
+          lastErrorMessage = e.message;
+        }
+      }
 
       // 🌟 ລາຍຊື່ Model ໃໝ່ລ່າສຸດ (Gemini 2.0 / 2.5 / 1.5) ເພື່ອລອງເອີ້ນແບບອັດຕະໂນມັດ
       const CANDIDATE_MODELS = [
