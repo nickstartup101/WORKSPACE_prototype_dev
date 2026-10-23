@@ -2,12 +2,12 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { auth, db } from '../firebase';
 import { 
   collection, addDoc, onSnapshot, 
-  deleteDoc, doc, setDoc, serverTimestamp, getDoc 
+  deleteDoc, doc, setDoc, serverTimestamp 
 } from 'firebase/firestore';
 import { 
   Plus, Trash2, Search, Download, 
   List, Receipt, Image as ImageIcon, Upload, Eye, X, Truck,
-  Sparkles, Bot, Check, ArrowRight, RefreshCw, AlertCircle
+  Sparkles, Bot, Check, Key
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { utils, writeFile } from 'xlsx';
@@ -69,7 +69,7 @@ const toStandardDateString = (raw: any): string => {
 };
 
 export default function Suppliers() {
-  const { t, i18n } = useTranslation();
+  const { i18n } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [products, setProducts] = useState<any[]>([]);
@@ -81,7 +81,13 @@ export default function Suppliers() {
   const [showProductManager, setShowProductManager] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
-  // 🌟 AI Scanner States
+  // 🌟 AI Scanner States & API Key Management
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    return localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || '';
+  });
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [tempApiKeyInput, setTempApiKeyInput] = useState('');
+
   const [isAiScanning, setIsAiScanning] = useState(false);
   const [showScanReviewModal, setShowScanReviewModal] = useState(false);
   const [scannedItems, setScannedItems] = useState<ScannedItemPreview[]>([]);
@@ -94,11 +100,11 @@ export default function Suppliers() {
   // Form State
   const [billDate, setBillDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
   const [billTime, setBillTime] = useState<string>(format(new Date(), 'HH:mm'));
-  const [supplier, setSupplier] = useState<string>('LUCKKHANA');
+  const [supplier, setSupplier] = useState<string>('CHANHOM');
   const [category, setCategory] = useState<ExpenseCategory>('purchasing');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
-  const [currency, setCurrency] = useState<string>('THB');
-  const [exchangeRate, setExchangeRate] = useState<number>(650);
+  const [currency, setCurrency] = useState<string>('LAK');
+  const [exchangeRate, setExchangeRate] = useState<number>(1);
   const [billImageBase64, setBillImageBase64] = useState<string>('');
   const [billRemark, setBillRemark] = useState<string>('');
   const [saveLoading, setSaveLoading] = useState(false);
@@ -139,7 +145,6 @@ export default function Suppliers() {
     const unsubS = onSnapshot(collection(db, 'supplierPrices'), (snap) => {
       setSupplierPrices(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    // ດຶງຖານຂໍ້ມູນ Learning ຂອງໃບບິນ
     const unsubL = onSnapshot(collection(db, 'receipt_learnings'), (snap) => {
       const map: Record<string, any> = {};
       snap.docs.forEach(d => { map[d.id] = d.data(); });
@@ -162,7 +167,7 @@ export default function Suppliers() {
     });
   }, [supplierPrices]);
 
-  // Image Processing & Compression
+  // Image Processing
   const processImageFile = (file: File) => {
     if (!file || !file.type.startsWith('image/')) {
       alert(i18n.language === 'la' ? 'ກະລຸນາເລືອກໄຟລ໌ຮູບພາບ (JPG, PNG)' : 'Please select an image file.');
@@ -187,7 +192,6 @@ export default function Suppliers() {
     reader.readAsDataURL(file);
   };
 
-  // Clipboard Paste (Ctrl + V)
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
@@ -207,7 +211,7 @@ export default function Suppliers() {
   }, []);
 
   // ========================================================
-  // 🌟 AI OCR & SMART LEARNING ENGINE (ອ່ານໃບບິນດິຈິຕອນ 3 ພາສາ)
+  // 🌟 AI OCR SCANNER (ອ່ານຮູບຈິງ 100% ດ້ວຍ GOOGLE GEMINI)
   // ========================================================
   const handleScanReceiptWithAi = async () => {
     if (!billImageBase64) {
@@ -215,96 +219,77 @@ export default function Suppliers() {
       return;
     }
 
+    // ຖ້າຫາກຍັງບໍ່ທັນມີ API Key ໃຫ້ຂຶ້ນ Modal ໃຫ້ປ້ອນທັນທີ
+    if (!geminiApiKey) {
+      setShowApiKeyModal(true);
+      return;
+    }
+
     try {
       setIsAiScanning(true);
 
-      // ເອົາ Base64 ສົ່ງຫາ Gemini API (ຮອງຮັບພາສາລາວ-ໄທ-ອັງກິດຢ່າງສົມບູນ)
       const base64Data = billImageBase64.split(',')[1];
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 
       const promptText = `
-You are an expert digital receipt scanner for a restaurant/cafe in Laos/Thailand.
-Analyze this receipt image (which may be in Thai, Lao, or English).
-Extract the following information in strict JSON format:
-{
-  "supplier": "Detected supplier name (e.g., LUCKKHANA, CHANHOM, LATDA, or OTHER)",
-  "date": "YYYY-MM-DD (Note: if date is Buddhist Era like 2569, convert to CE 2026 by subtracting 543)",
-  "time": "HH:MM",
-  "currency": "THB or LAK",
-  "items": [
-    {
-      "name": "Exact item description as written on receipt",
-      "quantity": number,
-      "pricePerUnit": number,
-      "totalPrice": number,
-      "unit": "unit or ชิ้น, ลัง, แพ็ค, kg, etc."
-    }
-  ]
-}
-Return ONLY pure JSON. No markdown backticks, no comments.
+You are a highly accurate digital receipt scanner for a cafe & restaurant in Laos and Thailand.
+Examine this actual receipt image very carefully.
+Extract the REAL details printed on this receipt:
+1. "supplier": Match to one of [LUCKKHANA, CHANHOM, LATDA, HEAVENLY, DMART, MARRY ANN, LA TERRASSE, VIS, OTHER] based on store name or logo.
+2. "date": In YYYY-MM-DD. (Important: If date year is in Thai/Lao Buddhist Era like 2569, convert to CE 2026 by subtracting 543).
+3. "time": Time in HH:MM format if available.
+4. "currency": "THB" or "LAK".
+5. "items": Array of items bought:
+   - "name": Exact product description as printed on this receipt
+   - "quantity": Number of units bought
+   - "pricePerUnit": Price per unit
+   - "totalPrice": Total line price for this item
+   - "unit": e.g. ชิ้น, ลัง, แพ็ค, ถุง, or unit
+
+Return ONLY raw valid JSON with no markdown wrapping and no backticks.
+Format:
+{"supplier":"","date":"","time":"","currency":"","items":[{"name":"","quantity":1,"pricePerUnit":0,"totalPrice":0,"unit":""}]}
 `;
 
-      let aiResultJson: any = null;
-
-      if (apiKey) {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: promptText },
-                  { inline_data: { mime_type: 'image/jpeg', data: base64Data } }
-                ]
-              }
-            ]
-          })
-        });
-
-        const data = await response.json();
-        const rawReply = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const cleanJsonStr = rawReply.replace(/```json/g, '').replace(/```/g, '').trim();
-        aiResultJson = JSON.parse(cleanJsonStr);
-      } else {
-        // Fallback Client Simulation (ອີງຕາມຕົວຢ່າງໃບບິນ ລັກຂະນາແພັກ ທີ່ທ່ານສົ່ງມາ)
-        await new Promise(r => setTimeout(r, 2000));
-        aiResultJson = {
-          supplier: "LUCKKHANA",
-          date: "2026-10-17",
-          time: "17:30",
-          currency: "THB",
-          items: [
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
             {
-              name: "ຂວດ 250ມລ. ຢາສະຕຣີເພັນພາກ",
-              quantity: 30,
-              pricePerUnit: 14,
-              totalPrice: 420,
-              unit: "ຊິ້ນ"
-            },
-            {
-              name: "ຝາຍົກດື່ມ 98 ມີຈຸກປິດ 50ໃບ",
-              quantity: 2,
-              pricePerUnit: 620,
-              totalPrice: 1240,
-              unit: "ລັງ"
+              parts: [
+                { text: promptText },
+                { inline_data: { mime_type: 'image/jpeg', data: base64Data } }
+              ]
             }
-          ]
-        };
+          ],
+          generationConfig: {
+            temperature: 0.1
+          }
+        })
+      });
+
+      const resData = await response.json();
+      
+      if (resData.error) {
+        throw new Error(resData.error.message || 'Gemini API Error');
       }
 
-      // ຕັ້ງຄ່າຂໍ້ມູນທົ່ວໄປຂອງບິນ
+      const rawReply = resData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const cleanJsonStr = rawReply.replace(/```json/g, '').replace(/```/g, '').trim();
+      const aiResultJson = JSON.parse(cleanJsonStr);
+
+      // ກຳນົດຄ່າທີ່ AI ອ່ານໄດ້ຈາກຮູບຈິງ
       if (aiResultJson.supplier) {
-        const matchedSup = Object.keys(SUPPLIER_CODES).find(k => k.toLowerCase() === aiResultJson.supplier.toLowerCase()) || 'LUCKKHANA';
+        const matchedSup = Object.keys(SUPPLIER_CODES).find(k => k.toLowerCase() === String(aiResultJson.supplier).toLowerCase()) || 'OTHER';
         setScannedSupplier(matchedSup);
       }
       if (aiResultJson.date) setScannedDate(aiResultJson.date);
       if (aiResultJson.time) setScannedTime(aiResultJson.time);
       if (aiResultJson.currency) setScannedCurrency(aiResultJson.currency);
 
-      // 🌟 ຈັບຄູ່ສິນຄ້າອັດຕະໂນມັດ ໂດຍອີງໃສ່: 1) ຖານຂໍ້ມູນ Learning ທີ່ເຄີຍຈື່ໄວ້ | 2) ຊື່ສິນຄ້າໃນ Products
+      // 🌟 ຈັບຄູ່ສິນຄ້າອັດຕະໂນມັດ (Knowledge Base + Products)
       const matchedItems: ScannedItemPreview[] = (aiResultJson.items || []).map((it: any) => {
-        const cleanNameKey = it.name.trim().toLowerCase().replace(/\s+/g, '_');
+        const cleanNameKey = String(it.name || '').trim().toLowerCase().replace(/\s+/g, '_');
         
         let targetProdId = '';
         let targetProdName = '';
@@ -318,8 +303,8 @@ Return ONLY pure JSON. No markdown backticks, no comments.
         // 2. ຖ້າບໍ່ເຄີຍ Learn -> ຊອກຫາຊື່ທີ່ຄ້າຍຄືກັນໃນ Products
         else {
           const directMatch = products.find(p => 
-            p.name.toLowerCase().includes(it.name.toLowerCase()) || 
-            it.name.toLowerCase().includes(p.name.toLowerCase())
+            p.name.toLowerCase().includes(String(it.name || '').toLowerCase()) || 
+            String(it.name || '').toLowerCase().includes(p.name.toLowerCase())
           );
           if (directMatch) {
             targetProdId = directMatch.id;
@@ -328,7 +313,7 @@ Return ONLY pure JSON. No markdown backticks, no comments.
         }
 
         return {
-          rawName: it.name,
+          rawName: it.name || 'Unknown item',
           quantity: Number(it.quantity) || 1,
           pricePerUnit: Number(it.pricePerUnit) || 0,
           totalPrice: Number(it.totalPrice) || (Number(it.quantity) * Number(it.pricePerUnit)),
@@ -342,15 +327,23 @@ Return ONLY pure JSON. No markdown backticks, no comments.
       setShowScanReviewModal(true);
 
     } catch (err: any) {
-      alert('Error parsing receipt with AI: ' + err.message);
+      alert('Error parsing receipt with AI: ' + err.message + '\n(ກະລຸນາກວດສອບ Gemini API Key ຂອງທ່ານ)');
+      setShowApiKeyModal(true);
     } finally {
       setIsAiScanning(false);
     }
   };
 
-  // ບັນທຶກການຈັບຄູ່ (Learn & Remember) ແລະ ນຳເຂົ້າບິນ
+  const handleSaveApiKey = () => {
+    const cleanKey = tempApiKeyInput.trim();
+    if (!cleanKey) return;
+    localStorage.setItem('gemini_api_key', cleanKey);
+    setGeminiApiKey(cleanKey);
+    setShowApiKeyModal(false);
+    alert('✅ ບັນທຶກ API Key ສຳເລັດ! ລະບົບພ້ອມອ່ານໃບບິນຕົວຈິງແລ້ວ.');
+  };
+
   const handleConfirmAndImportScannedItems = async () => {
-    // 1. ບັນທຶກການຮຽນຮູ້ລົງ Firestore collection `receipt_learnings`
     for (const it of scannedItems) {
       if (it.matchedProductId) {
         const cleanKey = it.rawName.trim().toLowerCase().replace(/\s+/g, '_');
@@ -364,11 +357,14 @@ Return ONLY pure JSON. No markdown backticks, no comments.
       }
     }
 
-    // 2. ນຳເຂົ້າຟອມບິນ
     if (scannedSupplier) setSupplier(scannedSupplier);
     if (scannedDate) setBillDate(scannedDate);
     if (scannedTime) setBillTime(scannedTime);
-    if (scannedCurrency) setCurrency(scannedCurrency);
+    if (scannedCurrency) {
+      setCurrency(scannedCurrency);
+      if (scannedCurrency === 'THB') setExchangeRate(650);
+      else setExchangeRate(1);
+    }
 
     const convertedRows: FormItemRow[] = scannedItems.map((it, idx) => ({
       id: `ai-item-${Date.now()}-${idx}`,
@@ -389,12 +385,10 @@ Return ONLY pure JSON. No markdown backticks, no comments.
     alert(`🎉 ນຳເຂົ້າສຳເລັດ ${scannedItems.length} ລາຍການ! ລະບົບໄດ້ບັນທຶກການຈື່ຈຳສິນຄ້າຮຽບຮ້ອຍ.`);
   };
 
-  // ລຶບລາຍການທີ່ບໍ່ຕ້ອງການອອກຈາກລາຍການສະແກນ
   const handleRemoveScannedItem = (index: number) => {
     setScannedItems(prev => prev.filter((_, i) => i !== index));
   };
 
-  // ປ່ຽນການຈັບຄູ່ສິນຄ້າ
   const handleUpdateMatchedProduct = (index: number, prodId: string) => {
     const prod = products.find(p => p.id === prodId);
     setScannedItems(prev => {
@@ -572,12 +566,27 @@ Return ONLY pure JSON. No markdown backticks, no comments.
           </div>
         </div>
 
-        <button 
-          onClick={() => setShowProductManager(true)}
-          className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-white rounded-xl text-xs font-bold uppercase cursor-pointer"
-        >
-          <List className="w-3.5 h-3.5 inline mr-1" /> Manage Items ({products.length})
-        </button>
+        <div className="flex items-center gap-2">
+          {/* ປຸ່ມຕັ້ງຄ່າ API Key */}
+          <button
+            onClick={() => {
+              setTempApiKeyInput(geminiApiKey);
+              setShowApiKeyModal(true);
+            }}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-white rounded-xl text-xs font-bold uppercase flex items-center gap-1.5 cursor-pointer"
+            title="ຕັ້ງຄ່າ Gemini API Key ເພື່ອໃຫ້ AI ອ່ານບິນ"
+          >
+            <Key className="w-3.5 h-3.5 text-amber-500" />
+            <span>{geminiApiKey ? 'API Key (Active)' : 'ໃສ່ API Key'}</span>
+          </button>
+
+          <button 
+            onClick={() => setShowProductManager(true)}
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-white rounded-xl text-xs font-bold uppercase cursor-pointer"
+          >
+            <List className="w-3.5 h-3.5 inline mr-1" /> Items ({products.length})
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
@@ -636,7 +645,7 @@ Return ONLY pure JSON. No markdown backticks, no comments.
                     <div className="absolute inset-0 bg-cyan-500/10 backdrop-blur-[1px] flex flex-col items-center justify-center gap-2">
                       <Bot className="w-8 h-8 text-cyan-400 animate-pulse" />
                       <span className="text-xs font-black uppercase text-cyan-300 tracking-wider">
-                        AI ກຳລັງອ່ານລາຍການໃບບິນ...
+                        AI ກຳລັງອ່ານລາຍການໃບບິນຕົວຈິງ...
                       </span>
                     </div>
                   </div>
@@ -658,7 +667,6 @@ Return ONLY pure JSON. No markdown backticks, no comments.
                       <img src={billImageBase64} alt="Receipt" className="w-full h-36 object-contain cursor-pointer" onClick={() => setPreviewImageUrl(billImageBase64)} />
                     </div>
 
-                    {/* 🌟 ປຸ່ມກົດໃຫ້ AI ອ່ານໃບບິນດິຈິຕອນ */}
                     <button
                       type="button"
                       disabled={isAiScanning}
@@ -666,7 +674,7 @@ Return ONLY pure JSON. No markdown backticks, no comments.
                       className="w-full h-10 bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl text-xs font-black uppercase flex items-center justify-center gap-2 shadow-lg cursor-pointer transition-all disabled:opacity-50"
                     >
                       <Sparkles className="w-4 h-4 text-amber-300 animate-spin" />
-                      <span>{isAiScanning ? 'AI ກຳລັງສະແກນ...' : '⚡ ສະແກນໃບບິນດ້ວຍ AI (Lao/Thai/Eng)'}</span>
+                      <span>{isAiScanning ? 'AI ກຳລັງສະແກນ...' : '⚡ ສະແກນໃບບິນຕົວຈິງດ້ວຍ AI (Lao/Thai/Eng)'}</span>
                     </button>
                   </div>
                 ) : (
@@ -727,12 +735,12 @@ Return ONLY pure JSON. No markdown backticks, no comments.
                     value={supplier}
                     onChange={e => setSupplier(e.target.value)}
                   >
-                    <option value="LUCKKHANA">Luckkhana (LK)</option>
                     <option value="CHANHOM">CHANHOM (CH)</option>
                     <option value="LATDA">LATDA (LD)</option>
                     <option value="HEAVENLY">HEAVENLY (HV)</option>
                     <option value="DMART">DMART (DM)</option>
                     <option value="MARRY ANN">MARRY ANN (MA)</option>
+                    <option value="LUCKKHANA">Luckkhana (LK)</option>
                     <option value="LA TERRASSE">La Terrasse (LT)</option>
                     <option value="VIS">VIS (VS)</option>
                     <option value="OTHER">Other (OT)</option>
@@ -780,8 +788,8 @@ Return ONLY pure JSON. No markdown backticks, no comments.
                     }}
                     className="w-full h-10 px-2 rounded-xl bg-slate-50 dark:bg-white/5 border text-xs font-bold cursor-pointer"
                   >
-                    <option value="THB">THB (ບາດ)</option>
                     <option value="LAK">LAK (ກີບ)</option>
+                    <option value="THB">THB (ບາດ)</option>
                   </select>
                 </div>
                 {currency !== 'LAK' && (
@@ -1026,6 +1034,66 @@ Return ONLY pure JSON. No markdown backticks, no comments.
       </div>
 
       {/* ======================================================== */}
+      {/* 🌟 MODAL ໃສ່ GEMINI API KEY (ຟຣີ) */}
+      {/* ======================================================== */}
+      {showApiKeyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-[#073069] w-full max-w-md rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 dark:border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <Key className="w-5 h-5 text-amber-500" />
+                <h3 className="text-sm font-black uppercase text-slate-800 dark:text-white">
+                  ຕັ້ງຄ່າ Google Gemini API Key
+                </h3>
+              </div>
+              <button onClick={() => setShowApiKeyModal(false)} className="cursor-pointer text-slate-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-slate-300">
+              ເພື່ອໃຫ້ AI ສາມາດອ່ານຮູບໃບບິນຕົວຈິງໄດ້ (ທຸກຮ້ານ ທຸກພາສາ), ທ່ານຕ້ອງມີ Google API Key (ຟຣີ 100%):
+            </p>
+
+            <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-[11px] text-amber-700 dark:text-amber-300 space-y-1">
+              <p className="font-bold">👉 ວິທີເອົາ API Key ຟຣີ (20 ວິນາທີ):</p>
+              <p>1. ເຂົ້າເວັບ: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline font-bold text-indigo-500">aistudio.google.com/app/apikey</a></p>
+              <p>2. Login Gmail ແລ້ວກົດປຸ່ມ <strong>Create API Key</strong></p>
+              <p>3. Copy ລະຫັດມາໃສ່ໃນຊ່ອງລຸ່ມນີ້:</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase text-slate-400">ວາງ Gemini API Key ທີ່ນີ້:</label>
+              <input
+                type="password"
+                placeholder="AIzaSy..."
+                value={tempApiKeyInput}
+                onChange={e => setTempApiKeyInput(e.target.value)}
+                className="w-full h-11 px-3.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs font-mono font-bold outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => setShowApiKeyModal(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                ຍົກເລີກ
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveApiKey}
+                className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-black uppercase shadow-md cursor-pointer"
+              >
+                ບັນທຶກ API Key
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
       {/* 🌟 MODAL ກວດສອບ & ຈັບຄູ່ສິນຄ້າຈາກ AI SCANNER (AI REVIEW & LEARN) */}
       {/* ======================================================== */}
       {showScanReviewModal && (
@@ -1068,7 +1136,6 @@ Return ONLY pure JSON. No markdown backticks, no comments.
               ກວດສອບການຈັບຄູ່ສິນຄ້າ. <strong>ເມື່ອທ່ານເລືອກຈັບຄູ່ແລ້ວ ລະບົບຈະ Learn ແລະ ຈື່ຈຳໄວ້ສຳລັບໃບບິນຮອບຕໍ່ໆໄປ:</strong>
             </p>
 
-            {/* ລາຍການສິນຄ້າທີ່ AI ອ່ານໄດ້ */}
             <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
               {scannedItems.map((item, idx) => (
                 <div 
@@ -1090,12 +1157,10 @@ Return ONLY pure JSON. No markdown backticks, no comments.
                   </div>
 
                   <div className="grid grid-cols-12 gap-2 items-center pt-1 border-t border-slate-100 dark:border-white/5">
-                    {/* ຈຳນວນ & ລາຄາ */}
                     <div className="col-span-4 text-xs font-mono font-bold text-slate-600 dark:text-slate-300">
                       {item.quantity} {item.unit} @ {item.pricePerUnit.toLocaleString()} = <span className="text-indigo-600 dark:text-indigo-400 font-black">{item.totalPrice.toLocaleString()} {scannedCurrency}</span>
                     </div>
 
-                    {/* 🌟 Dropdown ຈັບຄູ່ສິນຄ້າໃນ Inventory (Learning Target) */}
                     <div className="col-span-8">
                       <select
                         value={item.matchedProductId}
@@ -1124,7 +1189,6 @@ Return ONLY pure JSON. No markdown backticks, no comments.
               ))}
             </div>
 
-            {/* ປຸ່ມນຳເຂົ້າ */}
             <div className="pt-3 border-t border-slate-100 dark:border-white/10 flex justify-between items-center">
               <span className="text-xs font-bold text-slate-500">
                 ລວມ {scannedItems.length} ລາຍການ
