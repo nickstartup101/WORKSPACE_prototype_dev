@@ -16,9 +16,8 @@ import {
   ChevronRight,
   PieChart,
   Receipt,
-  Sparkles,
   Scale,
-  PiggyBank // 👈 ເພີ່ມໄອຄອນກະປຸກອອມສິນ
+  PiggyBank
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
@@ -32,28 +31,28 @@ import Suppliers from './components/Suppliers';
 import Financials from './components/Financials';
 import Settings from './components/Settings';
 import PinModal from './components/PinModal';
-import ProcurementPlanner from './components/ProcurementPlanner';
 import FinanceReport from './components/FinanceReport';
 import DebtLedger from './components/DebtLedger';
 import CogsIntelligence from './components/CogsIntelligence';
-import DividendSettlement from './components/DividendSettlement'; // 👈 Import ໂມດູນປັນຜົນ
+import DividendSettlement from './components/DividendSettlement';
 
+// 🌟 Luxury Editorial Text Logo
 const TextLogo = ({ centered = false, dark = false, name = "La Dolce" }: { centered?: boolean, dark?: boolean, name?: string | null }) => (
-  <div className={`flex flex-col ${centered ? 'items-center text-center' : 'items-start text-left'} gap-2 group`}>
-    <h1 className={`text-5xl font-alice tracking-tight leading-none ${dark ? 'text-white' : 'text-[#052659] dark:text-white'}`}>
+  <div className={`flex flex-col ${centered ? 'items-center text-center' : 'items-start text-left'} gap-2`}>
+    <h1 className={`text-4xl sm:text-5xl font-serif tracking-tight leading-none ${dark ? 'text-white' : 'text-[#001839] dark:text-white'}`}>
       {name || "La Dolce"}
     </h1>
     
     <div className="flex items-center justify-center gap-3 w-full">
-      <div className={`h-[1px] flex-1 min-w-[12px] opacity-20 ${dark ? 'bg-white' : 'bg-[#052659]'}`}></div>
-      <span className={`text-[9px] font-sans font-black uppercase tracking-[0.5em] ${dark ? 'text-white/60' : 'text-[#052659]/60 dark:text-white/40'}`}>
-        Workspace
+      <div className={`h-[0.5px] flex-1 min-w-[12px] ${dark ? 'bg-white/20' : 'bg-[#001839]/20 dark:bg-white/20'}`} />
+      <span className={`text-[8.5px] font-sans font-black uppercase tracking-[0.45em] ${dark ? 'text-white/60' : 'text-[#001839]/60 dark:text-white/50'}`}>
+        WORKSPACE
       </span>
-      <div className={`h-[1px] flex-1 min-w-[12px] opacity-20 ${dark ? 'bg-white' : 'bg-[#052659]'}`}></div>
+      <div className={`h-[0.5px] flex-1 min-w-[12px] ${dark ? 'bg-white/20' : 'bg-[#001839]/20 dark:bg-white/20'}`} />
     </div>
     
-    <div className={`text-[8px] font-sans font-bold uppercase tracking-[0.8em] opacity-30 mt-1 ${dark ? 'text-white' : 'text-[#052659] dark:text-white'}`}>
-       estd 2026
+    <div className={`text-[7.5px] font-sans font-bold uppercase tracking-[0.6em] ${dark ? 'text-white/30' : 'text-[#001839]/30 dark:text-white/30'}`}>
+      ESTD 2026
     </div>
   </div>
 );
@@ -63,9 +62,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return window.innerWidth >= 1024;
-    }
+    if (typeof window !== 'undefined') return window.innerWidth >= 1024;
     return true;
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
@@ -116,14 +113,8 @@ export default function App() {
       if (isDemoLocalRef.current) return;
       setUser(u);
       
-      if (settingsUnsubscribe) {
-        settingsUnsubscribe();
-        settingsUnsubscribe = null;
-      }
-      if (adminUnsubscribe) {
-        adminUnsubscribe();
-        adminUnsubscribe = null;
-      }
+      if (settingsUnsubscribe) { settingsUnsubscribe(); settingsUnsubscribe = null; }
+      if (adminUnsubscribe) { adminUnsubscribe(); adminUnsubscribe = null; }
 
       if (u) {
         const configRef = doc(db, 'settings', 'appConfig');
@@ -133,20 +124,14 @@ export default function App() {
 
         const adminRef = doc(db, 'admins', u.uid);
         adminUnsubscribe = onSnapshot(adminRef, (snap) => {
-          if (snap.exists()) {
-            setAdminData(snap.data());
-          } else {
-            setAdminData(null);
-          }
+          if (snap.exists()) setAdminData(snap.data());
+          else setAdminData(null);
         });
 
         const settingsRef = doc(db, 'users', u.uid, 'settings', 'main');
         settingsUnsubscribe = onSnapshot(settingsRef, (snap) => {
-          if (snap.exists()) {
-            setUserSettings(snap.data());
-          } else {
-            setUserSettings({});
-          }
+          if (snap.exists()) setUserSettings(snap.data());
+          else setUserSettings({});
         }, (error) => {
           if (auth.currentUser) {
             handleFirestoreError(error, OperationType.GET, `users/${u.uid}/settings/main`);
@@ -167,8 +152,6 @@ export default function App() {
             } else {
               setActiveApprovalRequest(null);
             }
-          }, (err) => {
-            console.error("Approval listener error:", err);
           });
         }
 
@@ -210,9 +193,7 @@ export default function App() {
 
       if (isFinancialUnlocked && idleTime > FIVE_MINUTES) {
         setIsFinancialUnlocked(false);
-        if (activeTab === 'financials') {
-          setActiveTab('dashboard');
-        }
+        if (activeTab === 'financials') setActiveTab('dashboard');
       }
     }, 10000);
 
@@ -240,30 +221,29 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[#052659] p-4 text-center relative overflow-hidden">
-        <div className="glass-card max-w-lg w-full space-y-12 animate-in fade-in zoom-in duration-1000 py-20 px-10 border-slate-200 dark:border-white/5 shadow-2xl relative overflow-hidden">
-          <TextLogo centered={true} name={appConfig?.shopName || userSettings?.shopName} />
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#001839] p-4 text-center relative overflow-hidden">
+        <div className="max-w-lg w-full space-y-12 py-20 px-10 bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2.5rem] shadow-2xl relative overflow-hidden">
+          <TextLogo centered={true} dark={true} name={appConfig?.shopName || userSettings?.shopName} />
           <button 
             onClick={login}
-            className="crystal-button w-full h-16 flex items-center justify-center gap-4 text-[11px] shadow-none border border-[#052659]/10 dark:border-white/10"
+            className="w-full h-16 flex items-center justify-center gap-3 bg-white text-[#001839] hover:bg-slate-100 rounded-2xl text-[11px] font-black uppercase tracking-[0.25em] shadow-lg transition-all cursor-pointer"
           >
-            <Globe className="w-5 h-5 opacity-50" />
-            <span className="tracking-[0.2em]">{t('sign_in_google')}</span>
+            <Globe className="w-4 h-4 text-[#001839]/60" />
+            <span>{t('sign_in_google')}</span>
           </button>
         </div>
       </div>
     );
   }
 
-  // ✅ ລາຍການເມນູ Sidebar (ລວມທັງ Dividends):
+  // 🌟 Luxury Nav Items (Crisp SVG Symbols)
   const navItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: t('dashboard') },
     { id: 'report', icon: PieChart, label: i18n.language === 'la' ? 'ບົດລາຍງານການເງິນ' : 'Finance Report' },
-    { id: 'dividends', icon: PiggyBank, label: i18n.language === 'la' ? 'ປັນຜົນ & ເງິນ Stock' : 'Dividends & Stock Fund' }, // 👈 ເມນູໃໝ່
+    { id: 'dividends', icon: PiggyBank, label: i18n.language === 'la' ? 'ປັນຜົນ & ເງິນ Stock' : 'Dividends & Stock Fund' },
     { id: 'debts', icon: Receipt, label: i18n.language === 'la' ? 'ໜີ້ຕ້ອງສົ່ງ & ຮັບ (AP/AR)' : 'Debt Ledger' },
     { id: 'suppliers', icon: Truck, label: t('suppliers') },
     { id: 'cogs', icon: Scale, label: i18n.language === 'la' ? 'ຕົ້ນທຶນ COGS & ສະຕັອກ' : 'COGS & Stock' },
-    { id: 'planner', icon: Sparkles, label: i18n.language === 'la' ? 'ແຜນຈັດຊື້ & ບິນ' : 'Auto-Bill Planner' },
     { id: 'financials', icon: Wallet, label: t('financials'), isSensitive: true },
     { id: 'settings', icon: SettingsIcon, label: t('settings') },
   ];
@@ -302,66 +282,66 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex transition-colors duration-300">
+    <div className="min-h-screen flex transition-colors duration-300 bg-[#fbfbfb] dark:bg-[#001839]">
       {isSidebarOpen && (
         <div 
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-45 lg:hidden animate-in fade-in duration-200"
+          className="fixed inset-0 bg-[#001839]/60 backdrop-blur-sm z-45 lg:hidden animate-in fade-in duration-200"
           onClick={() => setIsSidebarOpen(false)}
         />
       )}
 
-      {/* Sidebar */}
+      {/* 🌟 Luxury Navy Sidebar (#001839) */}
       <aside className={`
-        fixed inset-y-0 left-0 z-50 bg-[#052659] text-white transition-all duration-300 flex flex-col h-screen
-        ${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-60'} w-56
+        fixed inset-y-0 left-0 z-50 bg-[#001839] text-white transition-all duration-300 flex flex-col h-screen border-r border-white/10
+        ${isSidebarCollapsed ? 'lg:w-20' : 'lg:w-64'} w-64
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
-        <div className={`border-b border-white/5 bg-black/5 flex items-center ${isSidebarCollapsed ? 'justify-center px-2 py-4' : 'justify-between p-6'} gap-2 shrink-0`}>
+        <div className={`border-b border-white/10 flex items-center ${isSidebarCollapsed ? 'justify-center px-2 py-6' : 'justify-between p-6'} gap-2 shrink-0`}>
           {!isSidebarCollapsed ? (
             <div className="flex-1 overflow-hidden animate-in fade-in duration-200">
               <TextLogo dark={true} centered={true} name={appConfig?.shopName || userSettings?.shopName} />
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center p-2 rounded-xl bg-white/5 border border-white/15 w-12 h-12 shrink-0">
-              <span className="text-[16px] font-alice font-bold text-white leading-none">LD</span>
+            <div className="flex flex-col items-center justify-center p-2 rounded-2xl bg-white/5 border border-white/15 w-12 h-12 shrink-0">
+              <span className="text-[17px] font-serif text-white leading-none">LD</span>
             </div>
           )}
           <button 
             onClick={() => setIsSidebarOpen(false)} 
-            className="lg:hidden p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-xl transition-all"
+            className="lg:hidden p-2 text-white/50 hover:text-white rounded-xl transition-all"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto p-3 space-y-1 mt-4">
+        <nav className="flex-1 overflow-y-auto p-3.5 space-y-1.5 mt-2">
           {navItems.map((item) => (
             <button
               key={item.id}
               onClick={() => handleTabChange(item)}
               title={isSidebarCollapsed ? item.label : undefined}
               className={`
-                w-full flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'justify-start px-4'} py-3 rounded-xl text-[12px] font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer
+                w-full flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'justify-start px-4'} py-3 rounded-2xl text-[11.5px] font-bold uppercase tracking-wider transition-all duration-200 cursor-pointer
                 ${activeTab === item.id 
-                  ? 'bg-white/10 text-white shadow-[0_8px_16px_-4px_rgba(0,0,0,0.3)] border border-white/10 backdrop-blur-md' 
-                  : 'text-white/40 hover:bg-white/5 hover:text-white'}
+                  ? 'bg-white text-[#001839] shadow-lg font-black' 
+                  : 'text-white/60 hover:bg-white/10 hover:text-white'}
               `}
             >
-              <item.icon className="w-4 h-4 shrink-0" />
+              <item.icon className={`w-4 h-4 shrink-0 ${activeTab === item.id ? 'text-[#001839]' : 'text-white/60'}`} />
               {!isSidebarCollapsed && (
-                <span className="truncate ml-3 animate-in fade-in duration-200">{item.label}</span>
+                <span className="truncate ml-3 animate-in fade-in duration-200 font-lao">{item.label}</span>
               )}
             </button>
           ))}
         </nav>
 
-        <div className="p-4 border-t border-white/10 bg-black/20 mt-auto shrink-0 flex flex-col gap-4">
+        <div className="p-4 border-t border-white/10 bg-black/10 mt-auto shrink-0 flex flex-col gap-3">
           <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'} overflow-hidden`}>
             <img src={user.photoURL || ''} alt="User" className="w-8 h-8 rounded-full border border-white/20 shrink-0" />
             {!isSidebarCollapsed && (
               <div className="overflow-hidden animate-in fade-in duration-200">
-                <p className="text-xs font-bold truncate">{user.displayName}</p>
-                <p className="text-[10px] opacity-40 truncate uppercase font-bold tracking-tighter">{t('admin_session')}</p>
+                <p className="text-xs font-bold truncate text-white">{user.displayName}</p>
+                <p className="text-[9px] text-white/40 truncate uppercase font-bold tracking-[0.2em]">ADMINISTRATOR</p>
               </div>
             )}
           </div>
@@ -376,7 +356,7 @@ export default function App() {
 
             <button 
               onClick={logout}
-              className={`flex items-center justify-center gap-2 py-2 text-[11px] font-bold uppercase tracking-widest text-red-300 hover:text-red-400 hover:bg-white/5 rounded-xl transition-all cursor-pointer ${isSidebarCollapsed ? 'w-full' : 'flex-1'}`}
+              className={`flex items-center justify-center gap-2 py-2 text-[10.5px] font-bold uppercase tracking-[0.2em] text-rose-300 hover:text-rose-200 hover:bg-white/5 rounded-xl transition-all cursor-pointer ${isSidebarCollapsed ? 'w-full' : 'flex-1'}`}
             >
               <LogOut className="w-3.5 h-3.5 shrink-0" />
               {!isSidebarCollapsed && <span className="animate-in fade-in duration-200">{t('logout')}</span>}
@@ -385,80 +365,78 @@ export default function App() {
         </div>
       </aside>
 
-      <div className={`hidden lg:block transition-all duration-300 shrink-0 ${isSidebarCollapsed ? 'w-20' : 'w-60'}`} />
+      <div className={`hidden lg:block transition-all duration-300 shrink-0 ${isSidebarCollapsed ? 'w-20' : 'w-64'}`} />
 
-      {/* Main Content */}
+      {/* 🌟 Main Stage */}
       <main className="flex-1 flex flex-col min-w-0 bg-transparent overflow-hidden">
-        <header className="h-14 bg-[#052659] text-white border-b border-white/10 px-4 lg:px-6 flex items-center justify-between sticky top-0 z-40 shadow-md">
+        <header className="h-16 bg-[#001839] text-white border-b border-white/10 px-4 lg:px-8 flex items-center justify-between sticky top-0 z-40">
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-white/10 rounded-lg">
               <Menu className="w-5 h-5 text-white" />
             </button>
-            <div className="flex items-center gap-2 text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">
-              <span>{t('home')}</span>
-              <span className="text-white/20">/</span>
-              <span className="text-white/80">{activeTab}</span>
+            <div className="flex items-center gap-2 text-[10px] font-black text-white/40 uppercase tracking-[0.25em]">
+              <span>WORKSPACE</span>
+              <span className="text-white/20">•</span>
+              <span className="text-white font-lao">{activeTab}</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-             <div className="relative group">
-               <button className="h-9 px-3 bg-white/10 hover:bg-white/15 active:bg-white/20 rounded-xl flex items-center gap-2 transition-all border border-white/5 shadow-inner cursor-pointer">
-                 <Store className="w-3.5 h-3.5 text-blue-300" />
-                 <span className="text-[10px] font-black uppercase tracking-wider text-white">
-                   {selectedBranch === 'branch_1' 
-                     ? (i18n.language === 'la' ? 'ສາຂາ 1 (ນະຄອນຫຼວງ)' : 'Branch 1 (Main)') 
-                     : (i18n.language === 'la' ? 'ສາຂາ 2 (ຫຼວງພະບາງ)' : 'Branch 2 (LPB)')
-                   }
-                 </span>
-                 <span className="text-[8px] opacity-40">▼</span>
-               </button>
-               <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-[#073069] border border-slate-100 dark:border-white/10 rounded-2xl shadow-xl py-2 hidden group-hover:block hover:block z-50 text-slate-800 dark:text-white">
-                 <button
-                   onClick={() => { setSelectedBranch('branch_1'); localStorage.setItem('selected_branch', 'branch_1'); }}
-                   className={`w-full text-left px-4 py-2.5 text-xs font-bold flex items-center gap-2 cursor-pointer ${selectedBranch === 'branch_1' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'text-slate-700 dark:text-slate-300'}`}
-                 >
-                   <MapPin className="w-3.5 h-3.5" />
-                   <span>ສາຂາ 1 (ນະຄອນຫຼວງ)</span>
-                 </button>
-                 <button
-                   onClick={() => { setSelectedBranch('branch_2'); localStorage.setItem('selected_branch', 'branch_2'); }}
-                   className={`w-full text-left px-4 py-2.5 text-xs font-bold flex items-center gap-2 cursor-pointer ${selectedBranch === 'branch_2' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : 'text-slate-700 dark:text-slate-300'}`}
-                 >
-                   <MapPin className="w-3.5 h-3.5" />
-                   <span>ສາຂາ 2 (ຫຼວງພະບາງ)</span>
-                 </button>
-               </div>
-             </div>
+          <div className="flex items-center gap-2.5">
+            <div className="relative group">
+              <button className="h-9 px-3.5 bg-white/10 hover:bg-white/15 rounded-xl flex items-center gap-2 transition-all border border-white/10 cursor-pointer">
+                <Store className="w-3.5 h-3.5 text-white/80" />
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-white font-lao">
+                  {selectedBranch === 'branch_1' ? 'ສາຂາ 1 (ນະຄອນຫຼວງ)' : 'ສາຂາ 2 (ຫຼວງພະບາງ)'}
+                </span>
+                <span className="text-[8px] opacity-40">▼</span>
+              </button>
+              <div className="absolute right-0 mt-1 w-52 bg-white dark:bg-[#001839] border border-slate-200 dark:border-white/15 rounded-2xl shadow-2xl py-2 hidden group-hover:block z-50">
+                <button
+                  onClick={() => { setSelectedBranch('branch_1'); localStorage.setItem('selected_branch', 'branch_1'); }}
+                  className={`w-full text-left px-4 py-2.5 text-xs font-bold flex items-center gap-2 cursor-pointer font-lao ${selectedBranch === 'branch_1' ? 'bg-[#001839]/5 dark:bg-white/10 text-[#001839] dark:text-white font-black' : 'text-slate-600 dark:text-slate-300'}`}
+                >
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>ສາຂາ 1 (ນະຄອນຫຼວງ)</span>
+                </button>
+                <button
+                  onClick={() => { setSelectedBranch('branch_2'); localStorage.setItem('selected_branch', 'branch_2'); }}
+                  className={`w-full text-left px-4 py-2.5 text-xs font-bold flex items-center gap-2 cursor-pointer font-lao ${selectedBranch === 'branch_2' ? 'bg-[#001839]/5 dark:bg-white/10 text-[#001839] dark:text-white font-black' : 'text-slate-600 dark:text-slate-300'}`}
+                >
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>ສາຂາ 2 (ຫຼວງພະບາງ)</span>
+                </button>
+              </div>
+            </div>
 
-             <button 
+            <button 
               onClick={() => i18n.changeLanguage(i18n.language === 'la' ? 'en' : 'la')}
-              className="p-2 hover:bg-white/10 rounded-md text-white flex items-center gap-2 text-[10px] font-black uppercase tracking-widest cursor-pointer"
+              className="p-2 hover:bg-white/10 rounded-xl text-white flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-pointer"
             >
-              <Globe className="w-4 h-4 text-white/60" />
-              <span className="hidden sm:inline">{i18n.language === 'la' ? 'LA' : 'EN'}</span>
+              <Globe className="w-3.5 h-3.5 text-white/60" />
+              <span>{i18n.language === 'la' ? 'LA' : 'EN'}</span>
             </button>
+
             <button 
               onClick={() => setIsDarkMode(!isDarkMode)}
-              className="p-2 hover:bg-white/10 rounded-md text-white flex items-center gap-2 cursor-pointer"
+              className="p-2 hover:bg-white/10 rounded-xl text-white cursor-pointer"
+              title="Toggle Theme"
             >
-              {isDarkMode ? <Sun className="w-4 h-4 text-yellow-400" /> : <Moon className="w-4 h-4 text-blue-300" />}
+              {isDarkMode ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-white/80" />}
             </button>
           </div>
         </header>
 
-        {/* Dynamic Section Container */}
-        <div className="flex-1 p-4 lg:p-6 overflow-y-auto bg-gradient-to-br from-[#f8fafc] to-[#f1f5f9] dark:from-[#052659] dark:to-[#073069]">
-           <div className="max-w-7xl mx-auto space-y-6">
-             {activeTab === 'dashboard' && <Dashboard userSettings={userSettings} user={user} selectedBranch={selectedBranch} />}
-             {activeTab === 'report' && <FinanceReport selectedBranch={selectedBranch} />}
-             {activeTab === 'dividends' && <DividendSettlement selectedBranch={selectedBranch} />} {/* 👈 ແທັບປັນຜົນໃໝ່ */}
-             {activeTab === 'debts' && <DebtLedger selectedBranch={selectedBranch} />}
-             {activeTab === 'suppliers' && <Suppliers />}
-             {activeTab === 'cogs' && <CogsIntelligence selectedBranch={selectedBranch} userSettings={userSettings} />}
-             {activeTab === 'planner' && <ProcurementPlanner selectedBranch={selectedBranch} />}
-             {activeTab === 'financials' && <Financials appConfig={appConfig} selectedBranch={selectedBranch} />}
-             {activeTab === 'settings' && <Settings user={user} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} userSettings={userSettings} isSuperAdmin={isSuperAdmin} appConfig={appConfig} selectedBranch={selectedBranch} />}
+        {/* Dynamic Section Area */}
+        <div className="flex-1 p-4 lg:p-8 overflow-y-auto bg-[#fbfbfb] dark:bg-[#001839]">
+          <div className="max-w-7xl mx-auto space-y-6">
+            {activeTab === 'dashboard' && <Dashboard userSettings={userSettings} user={user} selectedBranch={selectedBranch} />}
+            {activeTab === 'report' && <FinanceReport selectedBranch={selectedBranch} />}
+            {activeTab === 'dividends' && <DividendSettlement selectedBranch={selectedBranch} />}
+            {activeTab === 'debts' && <DebtLedger selectedBranch={selectedBranch} />}
+            {activeTab === 'suppliers' && <Suppliers />}
+            {activeTab === 'cogs' && <CogsIntelligence selectedBranch={selectedBranch} userSettings={userSettings} />}
+            {activeTab === 'financials' && <Financials appConfig={appConfig} selectedBranch={selectedBranch} />}
+            {activeTab === 'settings' && <Settings user={user} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} userSettings={userSettings} isSuperAdmin={isSuperAdmin} appConfig={appConfig} selectedBranch={selectedBranch} />}
           </div>
         </div>
 
